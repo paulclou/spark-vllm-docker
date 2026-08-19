@@ -2,6 +2,24 @@
 # Dense hybrid model (16 full-attention + 48 linear layers). Decode is
 # bandwidth-bound, so TP=2 nearly doubles single-stream throughput and the KV
 # pool. Runs on a solo Spark with --tp 1.
+#
+# Source: https://gist.github.com/Mirrdhyn/d476d17723c9d68eac72f03ec9447f2b
+#   "Qwen3.8-27B-NVFP4 + MTP on a single DGX Spark - recipe, method, benchmarks"
+#
+# Deviations from that gist's launch block, both taken from its own
+# "Appendix: TP=2 on two Sparks":
+#   - tensor_parallel defaults to 2; the gist's block is TP=1. Decode is
+#     bandwidth-bound on this dense checkpoint, so splitting the 22 GB weight
+#     read gave +65% decode and 2.15x the KV pool. --solo forces TP=1.
+#   - --no-enable-flashinfer-autotune replaces the gist's
+#     --enable-flashinfer-autotune. Autotune is harmless at TP=1 but deadlocks
+#     engine startup at TP=2 on multi-node hosts without GPUDirect, with no
+#     error - just a once-a-minute shm_broadcast timeout
+#     (vllm-project/vllm#52291, filed on this hardware).
+#
+# Everything else matches the gist, including the deliberate omission of
+# --generation-config vllm: the checkpoint's own generation_config.json carries
+# Qwen's recommended sampling, and overriding it drops top_k entirely.
 
 recipe_version: "1"
 name: Qwen3.8-27B-NVFP4-MTP
