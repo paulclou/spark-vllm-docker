@@ -1,0 +1,52 @@
+# Recipe: Qwen3.8-27B-NVFP4 with the separate DSpark draft model
+# Same target checkpoint as qwen3.8-27b-nvfp4.yaml, drafted by a 5-layer DSpark
+# speculator instead of the in-checkpoint MTP head. Higher single-stream
+# throughput, so it suits agent loops and single-user sessions; the drafter's
+# weights and cache come out of the same memory budget, which costs KV pool.
+# Download both checkpoints before launching.
+
+recipe_version: "1"
+name: Qwen3.8-27B-NVFP4-DSpark
+description: vLLM serving unsloth/Qwen3.8-27B-NVFP4 with the Doopeworld DSpark draft model
+
+model: unsloth/Qwen3.8-27B-NVFP4
+container: vllm-node
+
+cluster_only: false
+solo_only: false
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  gpu_memory_utilization: 0.80
+  max_model_len: 262144
+  max_num_seqs: 8
+  num_speculative_tokens: 7
+
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  FLASHINFER_CUDA_ARCH_LIST: "12.1a"
+  FLASHINFER_DISABLE_VERSION_CHECK: "1"
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  VLLM_USE_FLASHINFER_SAMPLER: "1"
+
+command: |
+  vllm serve unsloth/Qwen3.8-27B-NVFP4 \
+    --served-model-name qwen3.8-27b \
+    --host {host} \
+    --port {port} \
+    -tp {tensor_parallel} \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --enable-prefix-caching \
+    --limit-mm-per-prompt '{{"image": 4, "video": 0}}' \
+    --reasoning-parser qwen3 \
+    --enable-auto-tool-choice \
+    --tool-call-parser qwen3_xml \
+    --no-enable-flashinfer-autotune \
+    --speculative_config.method dspark \
+    --speculative_config.model Doopeworld/Qwen3.8-27B-DSpark-vLLM \
+    --speculative_config.num_speculative_tokens {num_speculative_tokens} \
+    --speculative_config.draft_sample_method probabilistic
