@@ -54,10 +54,30 @@
 # the native window, and short-context work belongs on qwen3.8-27b-nvfp4.yaml,
 # which does it at 35-39 tok/s rather than this recipe's 25.
 #
-# With no drafter there is also no multi-token verify step, so the CUDA-graph
-# argument for TRITON_ATTN that governs the native-context recipes does not
-# apply here; FlashInfer stays, and it scales far better with KV depth
-# (~0.11 ms per 1k tokens of context against Triton's ~0.88).
+# FlashInfer stays as the attention backend, and unlike on the native-context
+# recipes that is not a default left unexamined. Measured on this exact recipe,
+# FlashInfer against TRITON_ATTN:
+#
+#                        FlashInfer   TRITON_ATTN
+#   decode @   1,510 tok    25.6         35.9      Triton +40%
+#   decode @ 213,574 tok    22.8         12.2      Triton -46%
+#   decode @ 287,519 tok     8.5          3.6      Triton -58%
+#   prefill @ 100,578 tok  1,623 tok/s  1,054      Triton -35%
+#   TTFT    @ 213,574 tok    178 s        329 s    Triton +85%
+#
+# Triton is much faster at short context and much slower at long context: step
+# time grows ~0.83 ms per 1k tokens of context against FlashInfer's ~0.11, and
+# the two cross near 42k tokens. A recipe whose whole purpose is long context
+# wants the backend on the right side of that crossover. Two further reasons
+# point the same way here: with no drafter there is no multi-token verify step,
+# so the CUDA-graph argument that governs the native-context recipes does not
+# apply at all, and prefill dominates the wall clock at these lengths.
+#
+# Note the A/B above was run with speculation still enabled, so it measures the
+# backends against each other rather than the exact configuration this recipe
+# now ships. The depth and prefill gaps are wide enough, and the CUDA-graph
+# argument for Triton disappears entirely without a drafter, that removing
+# speculation can only widen FlashInfer's lead here.
 #
 # Measured on the 2x Spark cluster 2026-08-20, this exact recipe:
 #   - GPU KV cache size 4,989,721 tokens, 4.76x concurrency at 1,048,576 per
