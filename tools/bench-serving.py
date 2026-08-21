@@ -58,14 +58,18 @@ class Client:
         self.base = base.rstrip("/")
         self.key = key
 
-    def _req(self, path, payload=None, stream=False):
+    def _req(self, path, payload=None, timeout=1800):
         url = f"{self.base}{path}"
         data = json.dumps(payload).encode() if payload is not None else None
         req = urllib.request.Request(url, data=data)
         req.add_header("Authorization", f"Bearer {self.key}")
+        # Ask the server to close rather than hold the socket open after the
+        # final SSE frame; a kept-alive idle socket is what makes a finished
+        # stream look like a hung one.
+        req.add_header("Connection", "close")
         if data:
             req.add_header("Content-Type", "application/json")
-        return urllib.request.urlopen(req, context=CTX, timeout=3600)
+        return urllib.request.urlopen(req, context=CTX, timeout=timeout)
 
     def complete(self, prompt, max_tokens, temperature=0.0):
         """Non-streaming completion. Returns (elapsed_s, usage dict)."""
@@ -81,7 +85,7 @@ class Client:
             body = json.loads(resp.read())
         return time.perf_counter() - t0, body["usage"], body["choices"][0]["text"]
 
-    def stream_ttft(self, prompt, max_tokens, temperature=0.0):
+    def stream_ttft(self, prompt, max_tokens, temperature=0.0, timeout=1800):
         """Streaming completion. Returns (ttft_s, total_s, completion_tokens, prompt_tokens).
 
         TTFT isolates prefill: for a long prompt it is essentially the prefill
@@ -98,7 +102,7 @@ class Client:
         t0 = time.perf_counter()
         ttft = None
         usage = None
-        with self._req("/v1/completions", payload) as resp:
+        with self._req("/v1/completions", payload, timeout=timeout) as resp:
             for raw in resp:
                 line = raw.decode().strip()
                 if not line.startswith("data: "):
@@ -112,6 +116,9 @@ class Client:
                 choices = obj.get("choices") or []
                 if ttft is None and choices and choices[0].get("text"):
                     ttft = time.perf_counter() - t0
+                if usage and choices and choices[0].get("finish_reason"):
+                    # Everything needed is in hand; do not wait on [DONE].
+                    break
         total = time.perf_counter() - t0
         return ttft, total, usage
 
@@ -253,10 +260,14 @@ def suite_prefill(cli, sizes):
     shortcut the prefill, and each size is requested once.
     """
     results = []
-    for target in sizes:
-        # ~4 chars/token for this filler; unique numbering defeats prefix reuse.
-        words = " ".join(f"item{i:07d} value{i * 7 % 9973:05d}"
-                         for i in range(target // 2))
+    for idx, target in enumerate(sizes):
+        # This filler runs ~14 tokens per item. Each size gets its own salt so
+        # the prompts are not nested prefixes of one another -- otherwise the
+        # larger sizes score against a warm prefix cache and read far faster
+        # than a genuine cold prefill.
+        salt = f"s{idx}x{target}"
+        words = " ".join(f"{salt}item{i:07d} value{i * 7 % 9973:05d}"
+                         for i in range(max(1, target // 14)))
         prompt = f"Read the following log and reply with only the word OK.\n{words}\nReply:"
         ttft, total, usage = cli.stream_ttft(prompt, 8)
         ptok = usage["prompt_tokens"] if usage else None
@@ -268,7 +279,9 @@ def suite_prefill(cli, sizes):
             "total_s": round(total, 3),
             "prefill_tok_per_s": rate,
         })
-        print(f"  prefill {ptok} tok: TTFT {ttft:.2f}s -> {rate} tok/s", flush=True)
+        shown = f"{ttft:.2f}s" if ttft else "n/a"
+        print(f"  prefill {ptok} tok: TTFT {shown} -> {rate} tok/s "
+              f"(total {total:.1f}s)", flush=True)
     return results
 
 
