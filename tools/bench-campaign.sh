@@ -87,6 +87,14 @@ transform_nospec() {
 DEPTHS_262K="1000,60000,140000"
 DEPTHS_1M="1000,130000,175000"
 
+# DSpark drafts a block of num_speculative_tokens tokens in ONE parallel pass
+# (vllm/v1/worker/gpu/spec_decode/dspark/speculator.py), not k sequential ones
+# like the MTP head, and the checkpoint is trained at block_size 7. So the cost
+# model that made k=3 win for MTP should not transfer: a 3-wide pass costs
+# nearly what a 7-wide one does on a bandwidth-bound device, while capping the
+# reward at 3 accepted tokens. Measured here rather than argued.
+transform_dspark_k3() { sed 's/^  num_speculative_tokens: 7$/  num_speculative_tokens: 3/'; }
+
 # name : source recipe : served model id : transform function : depth list
 variant_spec() {
   case "$1" in
@@ -98,6 +106,8 @@ variant_spec() {
     1m-nospec)     echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_nospec|$DEPTHS_1M" ;;
     1m-seqs8)      echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_seqs8|$DEPTHS_1M" ;;
     1m-kvheadroom) echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_kv|$DEPTHS_1M" ;;
+    dspark-k7)     echo "qwen3.8-27b-nvfp4-dspark|qwen3.8-27b|transform_none|$DEPTHS_262K" ;;
+    dspark-k3)     echo "qwen3.8-27b-nvfp4-dspark|qwen3.8-27b|transform_dspark_k3|$DEPTHS_262K" ;;
     *) return 1 ;;
   esac
 }
