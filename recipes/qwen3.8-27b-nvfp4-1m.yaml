@@ -43,9 +43,10 @@
 #
 # Past the native 262,144-token window the MTP head accepts *nothing* -
 # acceptance length 1.00, per-position rates 0.000/0.000/0.000, against 3.12 at
-# 254,652 tokens. YaRN rescales positions for the base model but the draft head
-# does not survive the extrapolation, so every step beyond 262k paid for three
-# sequential drafter passes and kept none of them. Measured decode at 287,519
+# 254,652 tokens - 0 accepted out of 246 drafted, not merely degraded - so every
+# step beyond 262k paid for three sequential drafter passes and kept none of
+# them. The cause is unexplained; see the measurement block above for why the
+# obvious YaRN explanation does not hold. Measured decode at 287,519
 # tokens: 8.5 tok/s with speculation, 14.4 without (+69%). Removing the drafter
 # also returns ~7% of the KV pool.
 #
