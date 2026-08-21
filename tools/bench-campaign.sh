@@ -69,6 +69,17 @@ transform_seqs8() { sed 's/^  max_num_seqs: 4$/  max_num_seqs: 8/'; }
 # The risk here is OOM under load, not correctness.
 transform_kv() { sed 's/^  gpu_memory_utilization: 0.82$/  gpu_memory_utilization: 0.88/'; }
 
+# Past the native 262,144-token window the MTP head accepts nothing at all
+# (measured: acceptance length 1.00, per-position 0/0/0 at 287,519 tokens,
+# against 3.12 at 254,652), so speculation there is three wasted drafter passes
+# per step. Decode fell from 23.0 to 8.5 tok/s across that boundary. Since the
+# 1M recipe exists precisely to serve contexts beyond 262k, this variant asks
+# whether it should carry speculation at all.
+transform_nospec() {
+  sed -e '/^    --speculative_config\./d' \
+      -e 's/^    --tool-call-parser qwen3_xml \\$/    --tool-call-parser qwen3_xml/'
+}
+
 # name : source recipe : served model id : transform function
 variant_spec() {
   case "$1" in
@@ -79,11 +90,12 @@ variant_spec() {
     1m-triton)     echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_triton" ;;
     1m-seqs8)      echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_seqs8" ;;
     1m-kvheadroom) echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_kv" ;;
+    1m-nospec)     echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_nospec" ;;
     *) return 1 ;;
   esac
 }
 
-ALL_VARIANTS="mtp-triton mtp-triton-k5 1m-triton 1m-seqs8 1m-kvheadroom"
+ALL_VARIANTS="mtp-triton mtp-triton-k5 1m-triton 1m-nospec 1m-seqs8 1m-kvheadroom"
 VARIANTS=("${@:-}")
 [ -z "${VARIANTS[0]:-}" ] && read -ra VARIANTS <<< "$ALL_VARIANTS"
 
@@ -172,7 +184,7 @@ for v in "${VARIANTS[@]}"; do
   echo "  benchmarking..."
   python3 "$REPO/tools/bench-serving.py" --base "$BASE" --model "$model" \
     --suite all --repeats 3 --max-tokens 256 --concurrency 1,2,4,8 \
-    --prefill-sizes 16000,64000 --label "$v" \
+    --prefill-sizes 16000,64000 --depths 1000,130000,175000 --label "$v" \
     --json "$OUTDIR/bench-$v.json" 2>&1 | sed 's/^/    /'
 
   echo "  quality probe..."
