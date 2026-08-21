@@ -47,6 +47,15 @@
 #   - The 323k request also confirms YaRN is doing its job past the native
 #     262,144-token limit.
 #
+# The served name is qwen3.8-27b-1m, not the qwen3.8-27b the two native-context
+# recipes share. A served name should distinguish what changes the client's
+# contract and nothing else: the context window does - 262,144 against
+# 1,048,576, and a client has to be configured for it - while the drafter does
+# not, since MTP and DSpark take byte-identical requests. That is also why the
+# native pair keeps one shared name: swapping between them stays a systemctl
+# stop/start with no client change. Only one service binds port 8000, so
+# whichever recipe is not running 404s on its name.
+#
 # Everything else - sampling from the checkpoint's generation_config.json, the
 # multimodal limits, the parsers, and leaving FlashInfer autotune at vLLM's
 # default - matches qwen3.8-27b-nvfp4.yaml.
@@ -81,7 +90,7 @@ env:
 
 command: |
   vllm serve unsloth/Qwen3.8-27B-NVFP4 \
-    --served-model-name qwen3.8-27b \
+    --served-model-name qwen3.8-27b-1m \
     --host {host} \
     --port {port} \
     -tp {tensor_parallel} \
