@@ -55,6 +55,29 @@
 #     pool would hold many more realistically-sized requests.
 #   - The 323k request also confirms YaRN is doing its job past the native
 #     262,144-token limit.
+#   - Decode barely cares about context depth, right up until it falls off a
+#     cliff. Measured decode, 128 tokens generated after a cold prefill:
+#         1,510 tok context ....... 25.6 tok/s   acceptance 3.x
+#        25,143 .................. 26.7 tok/s   acceptance 3.x
+#       100,581 .................. 25.2 tok/s   acceptance 3.x
+#       213,574 .................. 22.8 tok/s   acceptance 3.00
+#       254,652 .................. 23.0 tok/s   acceptance 3.12
+#       287,519 ................... 8.5 tok/s   acceptance 1.00  <- past native
+#       328,574 ................... 8.3 tok/s   acceptance 1.00
+#
+#     The cliff sits exactly on the native 262,144 boundary, and it is not a
+#     bandwidth effect: past that point the MTP head accepts *nothing*
+#     (per-position rates 0.000 / 0.000 / 0.000, against 0.93 / 0.68 / 0.51 at
+#     254k). YaRN carries the base model beyond its trained positions but not
+#     the draft head, so every step past 262k pays for three drafter passes and
+#     keeps none of them.
+#
+#     That is awkward for this recipe specifically, since its whole purpose is
+#     contexts beyond 262,144 - which is exactly where its speculation is pure
+#     overhead. Dropping --speculative_config.* here should recover a good part
+#     of the gap (very roughly 11 tok/s against the measured 8.5), at the cost
+#     of the ~2x speculation buys below the boundary. Not yet measured; the
+#     1m-nospec variant in tools/bench-campaign.sh is set up to settle it.
 #
 # The served name is qwen3.8-27b-1m, not the qwen3.8-27b the two native-context
 # recipes share. A served name should distinguish what changes the client's

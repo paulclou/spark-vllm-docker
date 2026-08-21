@@ -285,16 +285,65 @@ def suite_prefill(cli, sizes):
     return results
 
 
+def suite_depth(cli, depths, gen_tokens):
+    """Decode rate as a function of how much context is already in the KV cache.
+
+    Prefill rate and decode rate answer different questions. Prefill says how
+    long you wait to start; this says what the session feels like once you are
+    deep into it, which is the number that decides whether a large context
+    window is usable or merely available.
+
+    Each depth is measured by timing the whole request and subtracting the
+    measured TTFT, so the prefill is excluded rather than amortised into the
+    decode figure.
+    """
+    results = []
+    for idx, depth in enumerate(depths):
+        salt = f"d{idx}x{depth}"
+        words = " ".join(f"{salt}item{i:07d} value{i * 7 % 9973:05d}"
+                         for i in range(max(1, depth // 14)))
+        prompt = (f"Here is a log:\n{words}\n\n"
+                  "Ignore the log. Write a detailed paragraph about tidal "
+                  "patterns.")
+        before, before_pos = cli.snapshot()
+        ttft, total, usage = cli.stream_ttft(prompt, gen_tokens)
+        after, after_pos = cli.snapshot()
+        if not (ttft and usage):
+            print(f"  depth {depth}: no usable timing", flush=True)
+            continue
+        acc = acceptance(before, after)
+        pos = positional(before_pos, after_pos, acc["drafts"] if acc else 0)
+        n = usage["completion_tokens"]
+        decode_s = total - ttft
+        rate = n / decode_s if decode_s > 0 else None
+        results.append({
+            "context_tokens": usage["prompt_tokens"],
+            "completion_tokens": n,
+            "ttft_s": round(ttft, 3),
+            "decode_s": round(decode_s, 3),
+            "decode_tok_per_s": round(rate, 2) if rate else None,
+            "acceptance": acc,
+            "positional_accept_rate": pos,
+        })
+        al = acc["mean_acceptance_length"] if acc else float("nan")
+        print(f"  depth {usage['prompt_tokens']:>7} tok: decode "
+              f"{rate:5.2f} tok/s (TTFT {ttft:6.1f}s)  accept_len {al:.2f}  "
+              f"per_pos {pos}", flush=True)
+    return results
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="https://localhost:8000")
     ap.add_argument("--model", required=True)
     ap.add_argument("--suite", default="all",
-                    choices=["all", "decode", "concurrency", "prefill"])
+                    choices=["all", "decode", "concurrency", "prefill", "depth"])
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--max-tokens", type=int, default=256)
     ap.add_argument("--concurrency", default="1,2,4,8")
     ap.add_argument("--prefill-sizes", default="8000,32000,100000")
+    ap.add_argument("--depths", default="1000,16000,64000,200000")
+    ap.add_argument("--depth-gen-tokens", type=int, default=128)
     ap.add_argument("--label", default="")
     ap.add_argument("--json", dest="json_out", default="")
     args = ap.parse_args()
@@ -303,7 +352,8 @@ def main():
     cli.model = args.model
 
     out = {"label": args.label, "model": args.model, "suites": {}}
-    want = ("decode", "concurrency", "prefill") if args.suite == "all" else (args.suite,)
+    want = (("decode", "concurrency", "prefill", "depth")
+            if args.suite == "all" else (args.suite,))
 
     if "decode" in want:
         print("== decode (single stream) ==", flush=True)
@@ -316,6 +366,11 @@ def main():
         print("== prefill ==", flush=True)
         sizes = [int(x) for x in args.prefill_sizes.split(",")]
         out["suites"]["prefill"] = suite_prefill(cli, sizes)
+
+    if "depth" in want:
+        print("== decode at context depth ==", flush=True)
+        depths = [int(x) for x in args.depths.split(",")]
+        out["suites"]["depth"] = suite_depth(cli, depths, args.depth_gen_tokens)
 
     if args.json_out:
         with open(args.json_out, "w") as fh:
