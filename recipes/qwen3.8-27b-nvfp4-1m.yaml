@@ -68,16 +68,24 @@
 #     The cliff sits exactly on the native 262,144 boundary, and it is not a
 #     bandwidth effect: past that point the MTP head accepts *nothing*
 #     (per-position rates 0.000 / 0.000 / 0.000, against 0.93 / 0.68 / 0.51 at
-#     254k). YaRN carries the base model beyond its trained positions but not
-#     the draft head, so every step past 262k pays for three drafter passes and
-#     keeps none of them.
+#     254k). Not merely degraded - 0 accepted out of 246 drafted. So every step
+#     past 262k pays for three drafter passes and keeps none of them.
 #
-#     That is awkward for this recipe specifically, since its whole purpose is
-#     contexts beyond 262,144 - which is exactly where its speculation is pure
-#     overhead. Dropping --speculative_config.* here should recover a good part
-#     of the gap (very roughly 11 tok/s against the measured 8.5), at the cost
-#     of the ~2x speculation buys below the boundary. Not yet measured; the
-#     1m-nospec variant in tools/bench-campaign.sh is set up to settle it.
+#     The cause is NOT established. The obvious story - that YaRN reaches the
+#     base model but not the draft head - is wrong: for method=mtp vLLM sets
+#     draft_model_config = target_model_config, so the head is the target
+#     checkpoint and shares one rope config. Nor is the base model extrapolating
+#     at 287k; with factor 4.0 that maps to ~72k in the original basis. What is
+#     known is that the head still runs and emits tokens, and the target rejects
+#     every one. Exactly zero rather than merely low points at something
+#     categorical - invalid position indexing, a clamped rotary cache - rather
+#     than quality decay, but that is a hypothesis, not a finding.
+#
+#     Whatever the cause, it is awkward for this recipe specifically, since its
+#     whole purpose is contexts beyond 262,144 - exactly where its speculation
+#     is pure overhead. Measured with --speculative_config.* removed: 14.4 tok/s
+#     at 287,519 against 8.5 with it, at the cost of the 28-47% speculation buys
+#     below the boundary.
 #
 # The served name is qwen3.8-27b-1m, not the qwen3.8-27b the two native-context
 # recipes share. A served name should distinguish what changes the client's
