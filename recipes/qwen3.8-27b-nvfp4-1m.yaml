@@ -40,10 +40,19 @@
 #     request. Higher than the base recipe's 4.37M because max_num_batched_tokens
 #     16384 shrinks the activation reserve.
 #   - Engine init 143 s (compilation 68 s).
-#   - Prefill is the cost that matters: 107,702 tokens took 77.3 s (~1,393 tok/s)
-#     and 323,078 tokens took 278.7 s (~1,159 tok/s). Extrapolating, a cold
-#     full-length 1M prefill is on the order of 15-18 minutes. Prefix caching is
-#     what makes a long session bearable; a cold one is not interactive.
+#   - Prefill is the cost that matters. The first figures here (107,702 tokens
+#     at ~1,393 tok/s, 323,078 at ~1,159 tok/s) were measured with prompts that
+#     were nested prefixes of one another, so they scored partly against a warm
+#     prefix cache - the server reported a 19.3% hit rate on a supposedly cold
+#     prefill. Re-measured with per-size salted prompts: 25,140 tokens at
+#     2,156 tok/s, 100,578 at 1,623 tok/s, 420,571 at 845 tok/s (497.8 s).
+#     Extrapolating that decay, a cold full-length 1M prefill is on the order of
+#     30 minutes, not the 15-18 first estimated. Prefix caching is what makes a
+#     long session bearable; a cold one is firmly a batch job.
+#   - max_num_seqs 4 is the ceiling on aggregate throughput, not memory:
+#     22.6 / 37.1 / 82.6 / 81.7 tok/s aggregate at concurrency 1 / 2 / 4 / 8.
+#     Past four slots requests queue. Raising it is untested here, but the KV
+#     pool would hold many more realistically-sized requests.
 #   - The 323k request also confirms YaRN is doing its job past the native
 #     262,144-token limit.
 #
