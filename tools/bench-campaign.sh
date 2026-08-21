@@ -165,18 +165,35 @@ for v in "${VARIANTS[@]}"; do
   ( cd "$REPO" && nohup ./run-recipe.sh "$recipe_arg" -e "VLLM_API_KEY=$KEY" \
       > "$log" 2>&1 & )
 
+  # Wait for readiness, but treat a dead launch as dead rather than slow. A
+  # crashed engine looks exactly like a long boot to a poll loop that only ever
+  # checks for success, so a transient failure costs the whole BOOT_TIMEOUT --
+  # 25 minutes of dots for a launch that died in the first two.
   echo -n "  booting"
-  ok=""
+  ok=""; dead=""
   for _ in $(seq 1 $((BOOT_TIMEOUT / 10))); do
     if [ "$(server_up)" = "200" ]; then ok=1; break; fi
+    if grep -qE "WorkerProc failed to start|Engine core initialization failed|raise e from None|EngineDeadError|torch.OutOfMemoryError|Traceback \(most recent call last\)" "$log" 2>/dev/null; then
+      dead="engine reported a fatal error"; break
+    fi
+    # The launcher exiting with no server is also terminal.
+    if ! pgrep -f "run-recipe" >/dev/null 2>&1 && [ -s "$log" ]; then
+      dead="launcher exited without serving"; break
+    fi
     echo -n "."
     sleep 10
   done
   echo
 
   if [ -z "$ok" ]; then
-    echo "  FAILED to come up within ${BOOT_TIMEOUT}s; see $log" >&2
-    tail -20 "$log" >&2
+    if [ -n "$dead" ]; then
+      echo "  FAILED: $dead" >&2
+    else
+      echo "  FAILED to come up within ${BOOT_TIMEOUT}s" >&2
+    fi
+    # Surface the actual exception, not the last 20 lines of shutdown noise.
+    grep -m3 -E "Error|Exception|Traceback" "$log" 2>/dev/null | cut -c1-200 >&2 || true
+    echo "  full log: $log" >&2
     stop_server
     continue
   fi
