@@ -80,22 +80,29 @@ transform_nospec() {
       -e 's/^    --tool-call-parser qwen3_xml \\$/    --tool-call-parser qwen3_xml/'
 }
 
-# name : source recipe : served model id : transform function
+# Depth targets per recipe family. The filler runs ~1.64 prompt tokens per unit
+# of depth, so 175000 lands near 287k: past the native window on purpose for the
+# 1M recipes, and past max_model_len entirely on the 262,144-token ones, where
+# the request would simply be rejected.
+DEPTHS_262K="1000,60000,140000"
+DEPTHS_1M="1000,130000,175000"
+
+# name : source recipe : served model id : transform function : depth list
 variant_spec() {
   case "$1" in
     # Validates PR #7's headline number with the current harness rather than
     # the single-prompt script the 39.5 tok/s figure came from.
-    mtp-triton)    echo "qwen3.8-27b-nvfp4|qwen3.8-27b|transform_none" ;;
-    mtp-triton-k5) echo "qwen3.8-27b-nvfp4|qwen3.8-27b|transform_k5" ;;
-    1m-triton)     echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_triton" ;;
-    1m-seqs8)      echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_seqs8" ;;
-    1m-kvheadroom) echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_kv" ;;
-    1m-nospec)     echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_nospec" ;;
+    mtp-triton)    echo "qwen3.8-27b-nvfp4|qwen3.8-27b|transform_none|$DEPTHS_262K" ;;
+    mtp-triton-k5) echo "qwen3.8-27b-nvfp4|qwen3.8-27b|transform_k5|$DEPTHS_262K" ;;
+    1m-triton)     echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_triton|$DEPTHS_1M" ;;
+    1m-nospec)     echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_nospec|$DEPTHS_1M" ;;
+    1m-seqs8)      echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_seqs8|$DEPTHS_1M" ;;
+    1m-kvheadroom) echo "qwen3.8-27b-nvfp4-1m|qwen3.8-27b-1m|transform_kv|$DEPTHS_1M" ;;
     *) return 1 ;;
   esac
 }
 
-ALL_VARIANTS="mtp-triton mtp-triton-k5 1m-triton 1m-nospec 1m-seqs8 1m-kvheadroom"
+ALL_VARIANTS="mtp-triton mtp-triton-k5 1m-nospec 1m-triton 1m-seqs8 1m-kvheadroom"
 VARIANTS=("${@:-}")
 [ -z "${VARIANTS[0]:-}" ] && read -ra VARIANTS <<< "$ALL_VARIANTS"
 
@@ -131,7 +138,7 @@ echo
 
 for v in "${VARIANTS[@]}"; do
   spec="$(variant_spec "$v")" || { echo "unknown variant: $v" >&2; continue; }
-  IFS='|' read -r src model xform <<< "$spec"
+  IFS='|' read -r src model xform depths <<< "$spec"
 
   echo "=============================================================="
   echo "[$v] from $src (serves $model)"
@@ -184,7 +191,7 @@ for v in "${VARIANTS[@]}"; do
   echo "  benchmarking..."
   python3 "$REPO/tools/bench-serving.py" --base "$BASE" --model "$model" \
     --suite all --repeats 3 --max-tokens 256 --concurrency 1,2,4,8 \
-    --prefill-sizes 16000,64000 --depths 1000,130000,175000 --label "$v" \
+    --prefill-sizes 16000,64000 --depths "$depths" --label "$v" \
     --json "$OUTDIR/bench-$v.json" 2>&1 | sed 's/^/    /'
 
   echo "  quality probe..."
