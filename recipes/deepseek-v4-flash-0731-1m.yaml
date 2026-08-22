@@ -1,48 +1,60 @@
 # Recipe: DeepSeek V4 Flash 0731 - pinned 1M context
 # DeepSeek V4 Flash using the B12X-optimized serving stack on an SM121 cluster
-
-# Why this variant exists
 #
-# The base recipe leaves max_model_len at "auto", which vLLM turns into -1 and
-# resolves with _auto_fit_max_model_len(): a binary search for the longest
-# sequence that fits the KV pool on the limiting worker. Every boot of the base
-# recipe logged a different answer, and never 1M:
+# ONE FLAG DIFFERENT FROM THE OFFICIAL vLLM RECIPE
 #
-#   Auto-fit max_model_len: reduced from 1048576 to 995328
-#                                                 987136
-#                                                 940288
-#                                                 926720
-#                                                 921856
-#                                                 833792   <- worst observed
+# The official DGX Spark profile (recipes.vllm.ai, hardware=dgx_spark_gb10,
+# nodes=2, pinned to eugr/spark-vllm-b12x:latest - the image this recipe runs)
+# omits --max-model-len entirely, so vLLM takes the checkpoint's own
+# max_position_embeddings of 1,048,576. It cannot boot that way on 2x Spark:
 #
-# So the advertised window was whatever memory happened to be free at boot,
-# swinging ~20% across restarts. The model itself is a 1M model: config.json
-# has max_position_embeddings 1048576 via YaRN factor 16 over
-# original_max_position_embeddings 65536.
+#   ValueError: To serve at least one request with the model's max seq len
+#   (1048576), 11.04 GiB KV cache is needed, which is larger than the available
+#   KV cache memory (10.33 GiB).
 #
-# Pinning max_model_len turns a shortfall into a boot failure instead of a
-# silently shorter window. gpu_memory_utilization 0.85 -> 0.90 and max_num_seqs
-# 8 -> 4 buy the headroom: the worst boot above needs +25.8% KV, the best +5.3%.
+# Measured 2026-08-22, two boots at official's util 0.85 / max_num_seqs 8:
+# 10.33 and 10.61 GiB available against 11.04 needed - short by 4-6%. The
+# arithmetic on a 121.69 GiB node: 0.85 x 121.69 = 103.4 GiB budget, minus
+# 81.34 GiB of weights, minus ~11.5 GiB of activations, non-torch, CUDA graphs
+# and indexer/draft scratch, leaves ~10.6 GiB. vLLM's own log notes that CUDA
+# graph profiling makes 0.85 "equivalent to 0.84", which is most of the gap.
 #
-# If a boot still fails on KV capacity, in order:
-#   1. mods/gpu-mem-util-gb + an absolute --gpu-memory-utilization-gb budget.
-#      The fraction is measured against fluctuating free memory on a unified-
-#      memory Spark, which is the likely cause of the spread above.
-#   2. max_num_batched_tokens 8192 -> 4096.
-# There is no KV-dtype lever: DeepSeek-V4 attention pins fp8_ds_mla at 584 B
-# per token, and nvfp4_ds_mla is unreachable for this model (its own resolver
-# asserts fp8, and V4_B12X_SPARSE lists fp8 only).
+# So this recipe changes exactly one value, gpu_memory_utilization 0.85 -> 0.90,
+# and pins max_model_len to the same 1,048,576 official intends implicitly.
+# max_num_seqs stays at official's 8: it was measured, not assumed.
 #
-# MEASURED 2026-08-22 (2x DGX Spark GB10, TP=2, DSpark k=5, fp8_ds_mla KV)
+#   util 0.85, seqs 8   10.33 / 10.61 GiB KV   fails at init
+#   util 0.90, seqs 8   19.22 GiB KV           1.72x at 1,048,576  <- this
+#   util 0.90, seqs 4   17.07 / 19.37 GiB KV   1.70x / 1.89x
+#   util 0.95, seqs 8   refused before allocating anything
 #
-# The pin works and it survives a reboot. Two boots, both advertising the full
-# window, with the memory variance landing in spare headroom instead of in the
-# context length:
+# 0.95 is not available on this hardware. vLLM gates on free memory at startup
+# (free >= util x total) and sees ~111 GiB free while the loader is staging
+# weights, against 115.61 GiB wanted. Dropping the page cache does not help:
+# with mods/drop-caches running on both nodes and Cached down to 1.4 GiB, the
+# gate still read 111.04 GiB. An idle box reports 117 GiB free, but that is not
+# the moment vLLM measures. The real ceiling is ~0.912, so 0.90 sits near the
+# top of the usable band with ~1.5 GiB of slack.
 #
-#   boot 1   KV pool 1,779,018 tokens   1.70x concurrency at 1,048,576
-#   boot 2   KV pool 1,977,584 tokens   1.89x concurrency at 1,048,576
+# WHY PIN THE WINDOW AT ALL
 #
-# Decode, single stream, 1024 tokens, 3 runs per family (mean of all 15: 57.5):
+# The base recipe uses max_model_len: auto, which vLLM turns into -1 and
+# resolves with _auto_fit_max_model_len() - a binary search for the longest
+# sequence that fits the pool. That is a documented vLLM tuning option, not a
+# mistake, and it guarantees the advertised window is servable. The cost is that
+# the window becomes whatever memory was free at boot; six boots gave 995328,
+# 987136, 940288, 926720, 921856 and 833792. This recipe takes the other trade:
+# fix the window at the checkpoint's real ceiling (YaRN factor 16 over
+# original_max_position_embeddings 65536 = 1,048,576) and buy the memory to
+# honour it, so a shortfall is a boot failure instead of a shorter context.
+#
+# MEASURED BEHAVIOUR (2026-08-22, TP=2, DSpark k=5, fp8_ds_mla KV)
+#
+# Boots are reproducible; the pool still varies with host state, but the window
+# no longer does: 1,779,018 / 1,977,584 / 1,805,091 tokens across three boots,
+# every one advertising 1,048,576.
+#
+# Decode, single stream, 1024 tokens, 3 runs per family (mean of 15: 57.5 tok/s):
 #
 #   prose        38.3 - 40.9 tok/s   accept_len 2.56 - 2.72
 #   chat         36.7 - 68.9         accept_len 2.50 - 4.97
@@ -50,44 +62,47 @@
 #   repetitive   68.8 - 77.3         accept_len 4.80 - 5.61
 #   peak         64.1 - 66.9         accept_len 4.49 - 4.78
 #
-# Spread inside a family is acceptance, not noise: identical code prompts ran
-# 48 and 73 tok/s with accept_len 3.27 and 5.17. Quote a range, never a point.
+# Spread inside a family is acceptance, not noise: identical code prompts ran 48
+# and 73 tok/s. Quote a range, never a point.
 #
-# Decode does NOT decay with depth - the headline result of this recipe:
+# Decode does NOT decay with depth, which is the headline result here:
 #
 #        870 tok    65.97 tok/s   TTFT   0.9s   accept_len 4.68
 #     56,190        36.70         TTFT  24.1s   accept_len 2.49
 #    224,706        43.09         TTFT 139.0s   accept_len 2.98
 #    928,582        48.43         TTFT 980.2s   accept_len 3.12
 #
-# 48 tok/s at 928k with acceptance still above 3 means the DSpark drafter keeps
-# earning its passes 14x past the model's native 65,536-token YaRN window. That
-# is the opposite of the Qwen3.8 MTP cliff (see qwen3.8-27b-nvfp4-1m.yaml, where
-# acceptance goes to exactly zero past native), so do NOT copy the "drop
-# speculation for long context" conclusion across model families - it is a
-# property of the drafter, and DSA sparse attention is why decode holds up.
+# 48 tok/s at 928k with acceptance above 3 means the DSpark drafter still earns
+# its passes 14x past the native 65,536-token YaRN window. That is the opposite
+# of the Qwen3.8 MTP cliff (qwen3.8-27b-nvfp4-1m.yaml, where acceptance goes to
+# exactly zero past native), so do not carry the "drop speculation for long
+# context" conclusion across model families.
 #
-# What 1M actually costs is TTFT: 16.3 minutes to first token. Prefill rate
-# peaks mid-range and decays - 411 tok/s at 6.9k, 888 at 27k, 2,147 at 86k,
-# 1,929 at 225k, ~818 while loading the 928k prompt. 1M is a batch context, not
-# an interactive one.
+# The context is usable, not merely allocatable: a needle planted 2% into a
+# ~1.04M-token prompt came back verbatim, unaided, and the same at 449k. What 1M
+# costs is TTFT - 974-980 s to first token. Prefill peaks mid-range and decays:
+# 411 tok/s at 6.9k, 888 at 27k, 2,147 at 86k, 1,929 at 225k, ~818 near 1M. This
+# is a batch context, not an interactive one, and the pool holds one full-length
+# request plus part of a second, whatever max_num_seqs says.
 #
-# Concurrency (max_num_seqs 4, 512 tokens): c1 30.3 tok/s, c2 28.4 aggregate /
-# 20.0 per stream, c4 59.4 / 23.1. Aggregate is flat by c2, so this config is
-# bandwidth-bound rather than batch-limited.
+# Concurrency (512 tokens): c1 30.3 tok/s, c2 28.4 aggregate / 20.0 per stream,
+# c4 59.4 / 23.1. Aggregate is flat by c2, so this config is bandwidth-bound.
+# tools/quality-probe.py scores 10/11 graded with static YaRN always on.
 #
-# Quality: tools/quality-probe.py scores 10/11 graded with static YaRN always on.
+# BENCHMARK THIS MODEL ON /v1/chat/completions, NOT /v1/completions
 #
-# OPEN: EMPTY COMPLETION AT ~449k
+# Today's harness used /v1/completions, which gives this thinking model no chat
+# template, and it produced three spurious "empty completion" results that cost
+# an afternoon. With no template the model believes it is mid-<think>, and its
+# first token is a near-tie: at 449k the top-5 was EOS -0.663, ' Do' -1.288,
+# '</think>' -2.163, so greedy picked EOS and returned zero tokens with 200 OK.
+# At ~1.04M the same prompt put '</think>' first and answered correctly. Forcing
+# past that one token (min_tokens=32 or ignore_eos) retrieved the needle every
+# time. Nothing to do with depth, sparse attention, or this recipe - the numbers
+# above are sound, but treat any future empty completion on /v1/completions as a
+# harness artifact until reproduced on the chat endpoint.
 #
-# A 449,406-token prompt returns completion_tokens=1, finish_reason "stop",
-# empty text - the greedy first token is EOS. Reproducible: two different filler
-# salts at that depth, identical result, temp 0. It is NOT monotonic in depth -
-# 224,706 and 928,582 answer normally with the same prompt shape - and the
-# server logs 200 OK with no engine error, so a client sees a silent empty
-# answer. Unexplained; do not treat deep context as reliable until it is.
-#
-# NVFP4 KV IS NOT AN OPTION HERE - DO NOT RETRY IT
+# NVFP4 KV IS NOT AN OPTION - DO NOT RETRY IT
 #
 # Tested 2026-08-22: --kv-cache-dtype nvfp4_ds_mla dies in ~2s at config
 # validation, before weights load:
@@ -97,29 +112,24 @@
 #
 # The guard is VllmConfig.validate_nvfp4_kv_cache_with_mla -
 # cache_dtype.startswith("nvfp4") and model_config.use_mla - so it rejects
-# nvfp4, nvfp4_4over6 AND nvfp4_ds_mla for every MLA model, not just this one.
-# It exists because vllm-project/vllm#43562 had NVFP4 KV boot clean on SM120 and
-# then kill the engine on the first request; failing fast is the fix. The same
-# error is reported for GLM-5.2-NVFP4 (HF discussions/1), so the 432 B/token
-# nvfp4_ds_mla layout in B12xMLASparseBackend is unreachable for any MLA model
-# on this image. fp8_ds_mla at 584 B/token is the floor for DeepSeek-V4, and
-# gpu_memory_utilization plus max_num_seqs are the only context levers left.
+# nvfp4, nvfp4_4over6 and nvfp4_ds_mla for every MLA model. It exists because
+# vllm-project/vllm#43562 had NVFP4 KV boot clean on SM120 and then kill the
+# engine on the first request. The same error is reported for GLM-5.2-NVFP4
+# (HF discussions/1), so the 432 B/token nvfp4_ds_mla layout in
+# B12xMLASparseBackend is unreachable for any MLA model here. fp8_ds_mla at
+# 584 B/token is the floor, and util plus max_num_seqs are the only levers.
 #
 # Third-party recipes advertising "1M NVFP4 KV" for this checkpoint delete that
 # validator and then pin the page back to fp8's 584-byte envelope, so their KV
-# is byte-identical to this recipe's while carrying a different dtype string.
-# Their own notes record the real 416-byte layout failing past ~411 tokens.
+# is byte-identical to this recipe's under a different dtype string. Their own
+# notes record the real 416-byte layout failing past ~411 tokens.
 #
 # KNOWN RISK: vllm-project/vllm#40969 (open) reports DeepSeek-V4-Flash hanging
 # after ~6 requests with cudagraph_mode=FULL_AND_PIECEWISE plus chunked prefill
-# on SM 12.x, which is what this recipe runs. Not reproduced here across a
-# multi-hour session and ~90 requests including four 200k+ prefills, but it is
-# the most likely explanation for third-party reports of the b12x stack dying
-# after 1-2 hours. Watch for it before trusting this recipe unattended.
+# on SM 12.x, which is what this recipe runs. Not reproduced here across ~100
+# requests and five boots including four 200k+ prefills, but it is the likeliest
+# explanation for third-party reports of this stack dying after 1-2 hours.
 #
-# At 1M the pool holds one to two requests depending on the boot, so treat
-# concurrency here as ~1. Use the base recipe for the concurrency suite.
-
 recipe_version: "1"
 name: DeepSeek-V4-Flash-0731-1M
 description: DeepSeek-V4-Flash-0731 on a dual Spark at a pinned 1,048,576-token context
@@ -143,7 +153,7 @@ defaults:
   gpu_memory_utilization: 0.90
   max_model_len: 1048576
   block_size: 256
-  max_num_seqs: 4
+  max_num_seqs: 8
   max_num_batched_tokens: 8192
   max_cudagraph_capture_size: 64
   num_speculative_tokens: 5
