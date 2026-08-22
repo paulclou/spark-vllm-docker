@@ -1,0 +1,174 @@
+# Recipe: DeepSeek V4 Flash 0731 with the NVFP4 MLA latent KV cache.
+#
+# Identical to deepseek-v4-flash-0731.yaml in every respect except one flag:
+# --kv-cache-dtype nvfp4_ds_mla instead of fp8. Everything else is held fixed
+# deliberately so the pair is a clean A/B on the KV record format alone.
+#
+# WHY THIS IS POSSIBLE HERE AND NOWHERE ELSE IN THIS REPO
+#
+# NVFP4 KV comes in two unrelated implementations, and only one of them is
+# reachable on GB10 (sm_121):
+#
+#   - "nvfp4" / "nvfp4_4over6" (dense attention) is implemented only in
+#     FlashInferBackend, and its wrappers hard-select backend="trtllm-gen"
+#     whenever the cache is NVFP4. supports_trtllm_attention() ends in
+#     current_platform.is_device_capability_family(100), so it is always False
+#     on GB10 - the same architectural wall documented for spec-decode CUDA
+#     graphs. Every dense recipe in this repo is therefore stuck at fp8 KV.
+#   - "nvfp4_ds_mla" (MLA latent) is implemented in B12X_MLA_SPARSE, which is
+#     exactly the backend this recipe family already runs, and is gated on
+#     nothing platform-specific. This recipe is the only place in the repo where
+#     an NVFP4 KV cache is actually reachable.
+#
+# The dtype does not exist at all in the stock vllm-node image (0.26.1rc1.dev515),
+# so the plain deepseek-v4-flash.yaml recipe cannot take this change - only the
+# b12x image (0.1.dev20003+gad848fc41) carries nvfp4_ds_mla.
+#
+# WHAT IT BUYS
+#
+# B12xMLASparseBackend.get_kv_cache_shape, per token per MLA layer:
+#
+#   fp8_ds_mla    656 B   512 NoPE + 16 inline FP32 scales + 128 BF16 RoPE
+#   nvfp4_ds_mla  432 B   256 B E2M1 NoPE + 32 B E4M3 group-16 scales
+#                         + 16 B pad + 128 B BF16 RoPE
+#
+# i.e. -34.1% on the MLA group. The 368-byte variant (KV_FP8_ROPE=1, which
+# reuses the pad for an FP32 amax and stores 64 E4M3 bytes where the BF16 RoPE
+# was) is NOT available: _kv_fp8_rope_enabled() requires model_type
+# glm_moe_dsa, and this checkpoint is deepseek_v4. Setting KV_FP8_ROPE=1 here
+# only logs "ignored", so the recipe does not set it.
+#
+# The saving does not translate 1:1 into pool capacity, because the pool also
+# holds the Lightning Indexer K cache (index_head_dim 128, index_n_heads 64),
+# which this build keeps at FP8 and which no flag on this hardware shrinks:
+#   - attention_config.use_fp4_indexer_cache asserts
+#     is_device_capability_family(100) - "requires Blackwell datacenter GPUs
+#     (sm_10x, e.g. B200/GB200); sm_120 (consumer Blackwell) and earlier
+#     architectures are not supported".
+#   - attention_config.indexer_kv_dtype accepts nvfp4 in its Literal but is
+#     wired only for MiniMax-M3, where nvfp4 raises "needs the (not-yet-added)"
+#     kernel support.
+# The boot log already reports "Using FP8 indexer cache for Lightning Indexer"
+# and "use_fp4_indexer_cache=False"; both stay that way here.
+#
+# So expect the aggregate gain to be smaller than 34%. The number to compare is
+# the "GPU KV cache size: N tokens" line against the fp8 baseline, which on
+# 2026-08-19 read 1,011,414 tokens from 10.53 GiB with the auto-fit window
+# reduced from 1,048,576 to 921,856. The first thing to check on this recipe is
+# whether auto-fit now reaches the checkpoint's full 1,048,576 window; if it
+# does and memory is left over, max_num_seqs (8) is the next lever, not the
+# context length.
+#
+# THE ACCURACY CAVEAT - READ BEFORE TRUSTING OUTPUT
+#
+# The deployed NVFP4 writer accepts a per-layer outer scale and then discards
+# it, quantizing at outer scale 1.0. vLLM's own comment calls feeding x/s_l
+# "exactly the missing writer-side normalization", with the CuTe readers
+# restoring s_l in-kernel. Both mechanisms that supply a real s_l are out of
+# reach for this checkpoint:
+#
+#   - VLLM_NVFP4_MLA_SCALES_FILE takes a calibrated per-layer JSON, but
+#     _load_nvfp4_mla_outer_scales hard-rejects anything not declaring
+#     num_layers=78 (a GLM-shaped artifact; this model has 43 layers, of which
+#     dspark_target_layer_ids is [40, 41, 42]). A synthetic 78-entry file would
+#     pass validation, but there is no calibration for THIS checkpoint to put
+#     in it, and inventing one is worse than identity.
+#   - VLLM_NVFP4_MLA_DYNAMIC_SCALE=1 derives a per-token second-level scale in
+#     the record, and would be the right answer - but it requires the 368-byte
+#     KV_FP8_ROPE=1 layout, which is glm_moe_dsa-only. It raises at init here.
+#
+# This recipe therefore runs with an identity outer scale, which is the
+# underflow-exposed path for any layer whose latent magnitudes sit well below
+# 6*448. That is a quality risk, not a crash risk, and it is invisible in
+# tok/s. Do not promote this recipe on throughput numbers alone: run
+# tools/quality-probe.py against deepseek-v4-flash-0731 first, then against
+# this recipe, and diff. A KV dtype change is emphatically NOT expected to be
+# token-for-token neutral, so read the graded tasks, not just the digests.
+#
+# FIRST-LAUNCH COST
+#
+# The b12x CuTeDSL kernels specialize on the cache format. The current disk
+# cache holds entries with facts scale_format=0, fp8_rope=0,
+# latent_scale_identity=1; this recipe moves them to scale_format=2, so every
+# UnifiedDecodeKernel / UnifiedPrefillMGKernel variant misses and recompiles.
+# Expect a materially longer first start than the fp8 recipe's ~3.5 min engine
+# init, and expect jit_monitor warnings about in-inference compilation until
+# the shapes are warm. Launch it in the foreground the first time, never
+# straight into systemd.
+#
+# Unchanged from deepseek-v4-flash-0731.yaml and deliberately not retuned here:
+# block_size 256 (the backend advertises kernel block 64 and the kernels report
+# page_block_size=64 either way), gpu_memory_utilization 0.85, max_num_seqs 8,
+# the dspark drafter at k=5, and the whole b12x env block.
+
+recipe_version: "1"
+name: DeepSeek-V4-Flash-0731-NVFP4KV
+description: vLLM serving deepseek-ai/DeepSeek-V4-Flash-0731 with the NVFP4 MLA latent KV cache on dual Sparks
+
+model: deepseek-ai/DeepSeek-V4-Flash-0731
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+cluster_only: true
+
+mods:
+  - mods/instanttensor-hybrid-draft-loader
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  gpu_memory_utilization: 0.85
+  max_model_len: auto
+  block_size: 256
+  max_num_seqs: 8
+  max_num_batched_tokens: 8192
+  max_cudagraph_capture_size: 64
+  num_speculative_tokens: 5
+
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_AOT_COMPILE: "1"
+  VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
+  VLLM_USE_MEGA_AOT_ARTIFACT: "-1"
+  VLLM_MEMORY_PROFILE_INCLUDE_ATTN: "1"
+  VLLM_USE_FLASHINFER_SAMPLER: "1"
+  VLLM_USE_B12X_WO_PROJECTION: "1"
+  VLLM_USE_B12X_MHC: "1"
+  VLLM_USE_B12X_FP8_GEMM: "1"
+  VLLM_USE_B12X_MOE: "1"
+  VLLM_USE_B12X_SPARSE_INDEXER: "1"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_MOE_SKIP_PADDING: "0"
+  B12X_MLA_SM120_UNIFIED: "1"
+  B12X_MOE_FORCE_A8: "1"
+
+command: |
+  vllm serve deepseek-ai/DeepSeek-V4-Flash-0731 \
+      --host {host} \
+      --port {port} \
+      --trust-remote-code \
+      --tensor-parallel-size {tensor_parallel} \
+      --kv-cache-dtype nvfp4_ds_mla \
+      --block-size {block_size} \
+      --max-model-len {max_model_len} \
+      --max-num-seqs {max_num_seqs} \
+      --max-num-batched-tokens {max_num_batched_tokens} \
+      --gpu-memory-utilization {gpu_memory_utilization} \
+      --enable-prefix-caching \
+      --tokenizer-mode deepseek_v4 \
+      --tool-call-parser deepseek_v4 \
+      --enable-auto-tool-choice \
+      --reasoning-parser deepseek_v4 \
+      --reasoning-config '{{"reasoning_parser":"deepseek_v4","reasoning_start_str":"","reasoning_end_str":""}}' \
+      --default-chat-template-kwargs.thinking=true \
+      --default-chat-template-kwargs.reasoning_effort=high \
+      --load-format instanttensor \
+      --moe-backend b12x \
+      --linear-backend b12x \
+      --attention-backend B12X_MLA_SPARSE \
+      --max-cudagraph-capture-size {max_cudagraph_capture_size} \
+      --compilation-config '{{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}}' \
+      --speculative-config '{{"method":"dspark","num_speculative_tokens":{num_speculative_tokens},"draft_sample_method":"probabilistic","attention_backend":"B12X_MLA_SPARSE"}}'
