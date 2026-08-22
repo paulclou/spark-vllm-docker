@@ -1,0 +1,110 @@
+# Recipe: DeepSeek V4 Flash 0731 - pinned 1M context
+# DeepSeek V4 Flash using the B12X-optimized serving stack on an SM121 cluster
+
+# Why this variant exists
+#
+# The base recipe leaves max_model_len at "auto", which vLLM turns into -1 and
+# resolves with _auto_fit_max_model_len(): a binary search for the longest
+# sequence that fits the KV pool on the limiting worker. Every boot of the base
+# recipe logged a different answer, and never 1M:
+#
+#   Auto-fit max_model_len: reduced from 1048576 to 995328
+#                                                 987136
+#                                                 940288
+#                                                 926720
+#                                                 921856
+#                                                 833792   <- worst observed
+#
+# So the advertised window was whatever memory happened to be free at boot,
+# swinging ~20% across restarts. The model itself is a 1M model: config.json
+# has max_position_embeddings 1048576 via YaRN factor 16 over
+# original_max_position_embeddings 65536.
+#
+# Pinning max_model_len turns a shortfall into a boot failure instead of a
+# silently shorter window. gpu_memory_utilization 0.85 -> 0.90 and max_num_seqs
+# 8 -> 4 buy the headroom: the worst boot above needs +25.8% KV, the best +5.3%.
+#
+# If a boot still fails on KV capacity, in order:
+#   1. mods/gpu-mem-util-gb + an absolute --gpu-memory-utilization-gb budget.
+#      The fraction is measured against fluctuating free memory on a unified-
+#      memory Spark, which is the likely cause of the spread above.
+#   2. max_num_batched_tokens 8192 -> 4096.
+# There is no KV-dtype lever: DeepSeek-V4 attention pins fp8_ds_mla at 584 B
+# per token, and nvfp4_ds_mla is unreachable for this model (its own resolver
+# asserts fp8, and V4_B12X_SPARSE lists fp8 only).
+#
+# At 1M the pool holds ~one request, so concurrency here is ~1.0x by
+# construction. Use the base recipe for the concurrency suite.
+
+recipe_version: "1"
+name: DeepSeek-V4-Flash-0731-1M
+description: DeepSeek-V4-Flash-0731 on a dual Spark at a pinned 1,048,576-token context
+
+model: deepseek-ai/DeepSeek-V4-Flash-0731
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+cluster_only: true
+
+mods:
+  - mods/instanttensor-hybrid-draft-loader
+#   - mods/drop-caches
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  gpu_memory_utilization: 0.90
+  max_model_len: 1048576
+  block_size: 256
+  max_num_seqs: 4
+  max_num_batched_tokens: 8192
+  max_cudagraph_capture_size: 64
+  num_speculative_tokens: 5
+
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_AOT_COMPILE: "1"
+  VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
+  VLLM_USE_MEGA_AOT_ARTIFACT: "-1"
+  VLLM_MEMORY_PROFILE_INCLUDE_ATTN: "1"
+  VLLM_USE_FLASHINFER_SAMPLER: "1"
+  VLLM_USE_B12X_WO_PROJECTION: "1"
+  VLLM_USE_B12X_MHC: "1"
+  VLLM_USE_B12X_FP8_GEMM: "1"
+  VLLM_USE_B12X_MOE: "1"
+  VLLM_USE_B12X_SPARSE_INDEXER: "1"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_MOE_SKIP_PADDING: "0"
+  B12X_MLA_SM120_UNIFIED: "1"
+  B12X_MOE_FORCE_A8: "1"
+
+command: |
+  vllm serve deepseek-ai/DeepSeek-V4-Flash-0731 \
+      --host {host} \
+      --port {port} \
+      --trust-remote-code \
+      --tensor-parallel-size {tensor_parallel} \
+      --kv-cache-dtype fp8 \
+      --block-size {block_size} \
+      --max-model-len {max_model_len} \
+      --max-num-seqs {max_num_seqs} \
+      --max-num-batched-tokens {max_num_batched_tokens} \
+      --gpu-memory-utilization {gpu_memory_utilization} \
+      --enable-prefix-caching \
+      --tokenizer-mode deepseek_v4 \
+      --tool-call-parser deepseek_v4 \
+      --enable-auto-tool-choice \
+      --reasoning-parser deepseek_v4 \
+      --reasoning-config '{{"reasoning_parser":"deepseek_v4","reasoning_start_str":"","reasoning_end_str":""}}' \
+      --default-chat-template-kwargs.thinking=true \
+      --default-chat-template-kwargs.reasoning_effort=high \
+      --load-format instanttensor \
+      --moe-backend b12x \
+      --linear-backend b12x \
+      --attention-backend B12X_MLA_SPARSE \
+      --max-cudagraph-capture-size {max_cudagraph_capture_size} \
+      --compilation-config '{{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}}' \
+      --speculative-config '{{"method":"dspark","num_speculative_tokens":{num_speculative_tokens},"draft_sample_method":"probabilistic","attention_backend":"B12X_MLA_SPARSE"}}'
