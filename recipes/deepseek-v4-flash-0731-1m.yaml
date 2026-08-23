@@ -29,6 +29,37 @@
 # without a distinct id a client cannot tell a 524288-token window from a
 # 1,048,576-token one. Same convention as qwen3.8-27b-1m.
 #
+# Everything else matches the official command, including VLLM_MOE_SKIP_PADDING,
+# which the base recipe sets to "0" and this one does not set at all. Measured
+# A/B on this recipe, 2026-08-22, both sides verified by reading
+# /proc/<serving-pid>/environ and resolving vllm.envs rather than trusting the
+# export: off gave 11/11 graded and 57.11 tok/s mean over 15 runs, on (the
+# library default, which official uses) gave 11/11 and 58.11. The 1.8% sits
+# inside the per-family spread - chat moved 42-62 -> 39-50 while repetitive
+# moved 54-69 -> 71-78, opposite directions on the same change - and the only
+# digest differences were 'Yes' vs 'yes' and '53,59,61' vs '53, 59, 61' on
+# equally graded probes. So the flag is neutral here and the default is what
+# official ships. eugr's reason for setting it on the base recipe is
+# undocumented and may still hold there; this only speaks for this recipe.
+#
+# REMAINING DEVIATIONS, and why each one stays
+#
+#   gpu_memory_utilization 0.90 (official 0.85) - forced. At 0.85 this config
+#     dies at init: 10.33 / 10.61 GiB KV measured against 11.04 needed.
+#   --max-model-len 1048576 - the value official takes implicitly by omitting
+#     the flag; stating it makes a shortfall a boot failure instead of a
+#     silently shorter window.
+#   --served-model-name - so a client can tell this window from the base
+#     recipe's, since both bind port 8000.
+#   --ssl-keyfile / --ssl-certfile - fork-wide policy from PR #2, not a choice
+#     this recipe makes; every recipe here serves TLS and both client configs
+#     use https://.
+#   mods/instanttensor-hybrid-draft-loader - inherited from the base recipe. It
+#     patches the model loader so selected drafts load via lazy safetensors
+#     while target loads stay on InstantTensor. Official runs --load-format
+#     instanttensor without it, so it is a candidate for removal, but it is a
+#     source patch affecting DSpark draft loading and has not been tested off.
+#
 #   util 0.85, seqs 8   10.33 / 10.61 GiB KV   fails at init
 #   util 0.90, seqs 8   19.22 GiB KV           1.72x at 1,048,576  <- this
 #   util 0.90, seqs 4   17.07 / 19.37 GiB KV   1.70x / 1.89x
@@ -177,7 +208,6 @@ env:
   VLLM_USE_B12X_MOE: "1"
   VLLM_USE_B12X_SPARSE_INDEXER: "1"
   VLLM_USE_V2_MODEL_RUNNER: "1"
-  VLLM_MOE_SKIP_PADDING: "0"
   B12X_MLA_SM120_UNIFIED: "1"
   B12X_MOE_FORCE_A8: "1"
 
