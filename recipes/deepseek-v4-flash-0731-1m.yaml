@@ -237,7 +237,11 @@ name: DeepSeek-V4-Flash-0731-1M
 description: DeepSeek-V4-Flash-0731 on a dual Spark at a pinned 1,048,576-token context
 
 model: deepseek-ai/DeepSeek-V4-Flash-0731
-container: vllm-node-b12x
+# PINNED IMAGE — same pin and rationale as deepseek-v4-flash-0731.yaml (the
+# 20260813-20260815 b12x garble regression, eugr#356 / our #17); the episodic
+# acceptance-collapse garble reproduced on this recipe too, at 0-5% KV usage,
+# so neither the 1M window nor util 0.90 is implicated.
+container: eugr/spark-vllm-b12x:nightly-20260812
 
 build_args:
   - --exp-b12x

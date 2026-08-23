@@ -6,7 +6,21 @@ name: DeepSeek-V4-Flash-0731
 description: vLLM serving deepseek-ai/DeepSeek-V4-Flash-0731 on a dual Sparks using B12X docker
 
 model: deepseek-ai/DeepSeek-V4-Flash-0731
-container: vllm-node-b12x
+# PINNED IMAGE — do not float back to vllm-node-b12x (= b12x :latest) until
+# eugr/spark-vllm-docker#356 is fixed. The 20260813-20260815 b12x nightlies
+# episodically garble under concurrent traffic: spec-decode mean acceptance
+# collapses to ~1.0 for minutes (healthy 2.5-5), output degenerates into
+# repetition/CJK salad/leaked <|DSML|> markup, with ZERO log errors, then
+# self-recovers. Measured here 2026-08-23 on the d20260815 image: 8 sustained
+# episodes in ~9h, onset typically when a request finishes mid-batch;
+# reproduced on BOTH ds4f recipes, so recipe config is exonerated.
+#   bad:        nightly-20260813, nightly-20260815 (garble within 30min-hours)
+#   good:       nightly-20260810 (4 named rollback confirmations),
+#               nightly-20260812 (clean over "a billion tokens", forum)
+#   unverified: nightly-20260822+ (:latest) — canary before ever unpinning
+# Refs: eugr/spark-vllm-docker#356 - NVIDIA forum topic 376220 (p4-5) -
+# local-inference-lab/rtx6kpro#53 - paulclou/spark-vllm-docker#17.
+container: eugr/spark-vllm-b12x:nightly-20260812
 
 build_args:
   - --exp-b12x
