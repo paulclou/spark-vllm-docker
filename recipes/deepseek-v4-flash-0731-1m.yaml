@@ -191,11 +191,18 @@
 #     (t=+0.44, n=20 each). Any effect smaller than that is unmeasurable on this
 #     box, whatever the flag.
 #
-#   --async-scheduling: REDUNDANT for the same reason. async_scheduling defaults
-#     to None, and vllm/config/vllm.py resolves None to True unless something is
-#     incompatible; dspark is explicitly on the compatible list, the mp executor
-#     returns supports_async_scheduling()=True, and no boot logged a "will be
-#     disabled" warning. So this was also on-vs-on, which is why it read t=0.09.
+#   --async-scheduling: NO MEASURABLE EFFECT (t=0.09 over 50 runs per side, and
+#     exactly 0.0% on the peak family), and most likely redundant - but note the
+#     evidence here is weaker than for chunked prefill above. The engine config
+#     dump prints enable_chunked_prefill but NOT async_scheduling, so its
+#     resolved value was never observed. What is established: the field defaults
+#     to None (config/scheduler.py), vllm/config/vllm.py resolves None through
+#     five disable branches to `else: async_scheduling = True`, dspark is
+#     explicitly on the compatible list, the mp executor returns
+#     supports_async_scheduling()=True, and every disable branch emits a warning
+#     that no boot logged. That chain says on-by-default; it is inference from
+#     source plus absent warnings, not a read value. To settle it, boot with
+#     --no-async-scheduling and diff against the default.
 #
 #   max_num_batched_tokens 16384: WILL NOT BOOT at this window. The KV
 #     requirement rises 11.04 -> 17.85 GiB while availability falls 19.22 ->
