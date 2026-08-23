@@ -181,17 +181,21 @@
 #   --async-scheduling: NO EFFECT. 60.27 -> 60.01 overall, t=0.09. The only
 #     low-variance family (peak, sd 2.0) reads exactly 0.0%.
 #
-#   --enable-chunked-prefill: ADOPTED, and it took a second look to see why.
-#     The five-family run said decode -3.4% (t=-0.74), which is the noise floor
-#     talking: prose and chat carry sd ~13 tok/s. Re-measured on the peak family
-#     alone at n=20, where sd is ~3.9 and SE 1.23, decode is +0.54 tok/s
-#     (+0.8%, t=+0.44) - no cost, and the sign flipped. Prefill with 3 repeats
-#     per size: 8k 1761+-1023 -> 1942+-749 (unresolved, sd is 58% of the mean at
-#     that size), 32k 1898+-375 -> 2328+-138 (+23%, spreads barely overlap),
-#     100k 2137 -> 2171 (flat). Concurrency at a full window 1.63x -> 1.73x.
-#     Quality 11/11, one benign digest divergence. The single-shot "+83% at
-#     6.9k" and "+2.6 GiB KV" from the first pass did NOT survive repeats -
-#     both were single-sample artifacts.
+#   --enable-chunked-prefill: REDUNDANT. It is already the default in this build
+#     (SchedulerConfig.enable_chunked_prefill = True) and every boot logs
+#     enable_chunked_prefill=True with or without the flag, so the "baseline vs
+#     chunked" runs compared two identical configs. Everything they appeared to
+#     show was variance, and that makes them the most useful measurement here:
+#     between IDENTICAL configs, KV available ranged 16.9-19.6 GiB, prefill at
+#     32k ranged 1898-2328 tok/s, and peak-family decode differed by 0.8%
+#     (t=+0.44, n=20 each). Any effect smaller than that is unmeasurable on this
+#     box, whatever the flag.
+#
+#   --async-scheduling: REDUNDANT for the same reason. async_scheduling defaults
+#     to None, and vllm/config/vllm.py resolves None to True unless something is
+#     incompatible; dspark is explicitly on the compatible list, the mp executor
+#     returns supports_async_scheduling()=True, and no boot logged a "will be
+#     disabled" warning. So this was also on-vs-on, which is why it read t=0.09.
 #
 #   max_num_batched_tokens 16384: WILL NOT BOOT at this window. The KV
 #     requirement rises 11.04 -> 17.85 GiB while availability falls 19.22 ->
@@ -203,18 +207,17 @@
 #     Costs decode: -7.7% overall (t=-1.60) and chat -23.1% (t=-2.56, the only
 #     per-family regression here besides k=7's prose). Quality 11/11.
 #
-# Only chunked prefill was adopted: it costs no measurable decode and buys +23%
-# prefill at 32k, which is agent-context range. The batched-token levers were
-# not, because they buy KV headroom this recipe does not need - at 1M the pool
-# already holds one maximal request plus most of a second, and a 16-minute TTFT
-# is not a workload that runs many of those at once. If the goal ever becomes
-# several concurrent long sessions rather than one, max_num_batched_tokens 4096
-# is the lever, at about 8% of decode.
+# NOTHING was adopted. Two of the four levers turned out to be defaults already
+# in force, and the two that genuinely changed behaviour both regressed:
+# num_speculative_tokens 7 loses 22% on prose, and the batched-token levers
+# either fail to boot or trade 23% of chat for KV headroom a 1M recipe does not
+# need. Check a flag's default before benchmarking it - both redundant tests
+# produced plausible-looking numbers that were pure variance, and the sign even
+# flipped between two runs of the same config.
 #
-# Two things to keep in view on the adopted flag. The 8k prefill point is still
-# unresolved (sd 58% of mean), so do not quote a short-prompt gain. And
-# vllm#40969 below is an open hang report against exactly this flag: not
-# reproduced here across 150+ requests, but not disproven either.
+# If the goal ever becomes several concurrent long sessions rather than one,
+# max_num_batched_tokens 4096 is the real lever: pool 1.62x -> 2.76x at about 8%
+# of decode.
 #
 # KNOWN RISK: vllm-project/vllm#40969 (open) reports DeepSeek-V4-Flash hanging
 # after ~6 requests with cudagraph_mode=FULL_AND_PIECEWISE plus chunked prefill
@@ -280,7 +283,6 @@ command: |
       --max-num-batched-tokens {max_num_batched_tokens} \
       --gpu-memory-utilization {gpu_memory_utilization} \
       --enable-prefix-caching \
-      --enable-chunked-prefill \
       --tokenizer-mode deepseek_v4 \
       --tool-call-parser deepseek_v4 \
       --enable-auto-tool-choice \
