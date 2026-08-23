@@ -161,6 +161,50 @@
 # is byte-identical to this recipe's under a different dtype string. Their own
 # notes record the real 416-byte layout failing past ~411 tokens.
 #
+# TUNING ALREADY TRIED - DO NOT RE-RUN THESE
+#
+# Measured 2026-08-22/23 on this recipe, decode suite at --repeats 10 (50 runs
+# per config, five prompt families x ten) with a matched same-session baseline,
+# because at --repeats 5 four of five families sat inside the noise floor. The
+# noisy families carry sd ~13 tok/s (~30% of mean, acceptance-driven), so t is
+# quoted; |t| < 2 is unresolved, not a result. Baseline itself drifted 58.7 ->
+# 60.3 between campaigns, so only within-campaign comparisons count.
+#
+#   num_speculative_tokens 7 (the model card's value, vs 5 here and in the
+#     official recipe): REJECTED. prose 44.0 -> 34.5 tok/s (-22%), the other
+#     four families inside noise. Mechanism measured, not inferred: draft
+#     positions 5 and 6 accept at 0.012 / 0.005 on prose against 0.81 / 0.65 on
+#     code, so on unpredictable text the two extra drafter passes are pure cost.
+#     Code's ceiling does rise (74.7 -> 85.0, accept_len reaching the full 7.00)
+#     but its mean barely moves, so the peak is not what a workload gets.
+#
+#   --async-scheduling: NO EFFECT. 60.27 -> 60.01 overall, t=0.09. The only
+#     low-variance family (peak, sd 2.0) reads exactly 0.0%.
+#
+#   --enable-chunked-prefill: TRADEOFF, not adopted. Decode -3.4% (t=-0.74,
+#     unresolved) but KV available 16.9 -> 19.5 GiB, pool 1.70M -> 1.94M tokens,
+#     1.62x -> 1.85x, because chunking lowers peak activation. Prefill +83% at
+#     6.9k and +33% at 27k (the fixed-overhead range), flat at 86k, -13% at
+#     225k. Quality 11/11 with one benign digest divergence. Note vllm#40969
+#     below did NOT reproduce: 150+ requests through FULL_AND_PIECEWISE plus
+#     chunked prefill, engine healthy afterwards.
+#
+#   max_num_batched_tokens 16384: WILL NOT BOOT at this window. The KV
+#     requirement rises 11.04 -> 17.85 GiB while availability falls 19.22 ->
+#     12.09, because larger chunks inflate both the per-request reservation and
+#     peak activation. Not a throughput question.
+#
+#   max_num_batched_tokens 4096: TRADEOFF, not adopted, and the largest lever
+#     found. KV pool 1.70M -> 2.89M tokens, 1.62x -> 2.76x at a full window.
+#     Costs decode: -7.7% overall (t=-1.60) and chat -23.1% (t=-2.56, the only
+#     per-family regression here besides k=7's prose). Quality 11/11.
+#
+# Nothing was adopted because both tradeoffs buy KV headroom this recipe does
+# not need: at 1M the pool already holds one maximal request plus most of a
+# second, and a 16-minute TTFT is not a workload that runs many of those at
+# once. If the goal ever becomes several concurrent long sessions rather than
+# one, max_num_batched_tokens 4096 is the lever, at about 8% of decode.
+#
 # KNOWN RISK: vllm-project/vllm#40969 (open) reports DeepSeek-V4-Flash hanging
 # after ~6 requests with cudagraph_mode=FULL_AND_PIECEWISE plus chunked prefill
 # on SM 12.x, which is what this recipe runs. Not reproduced here across ~100
