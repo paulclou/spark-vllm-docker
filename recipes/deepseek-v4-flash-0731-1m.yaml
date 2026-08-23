@@ -181,13 +181,17 @@
 #   --async-scheduling: NO EFFECT. 60.27 -> 60.01 overall, t=0.09. The only
 #     low-variance family (peak, sd 2.0) reads exactly 0.0%.
 #
-#   --enable-chunked-prefill: TRADEOFF, not adopted. Decode -3.4% (t=-0.74,
-#     unresolved) but KV available 16.9 -> 19.5 GiB, pool 1.70M -> 1.94M tokens,
-#     1.62x -> 1.85x, because chunking lowers peak activation. Prefill +83% at
-#     6.9k and +33% at 27k (the fixed-overhead range), flat at 86k, -13% at
-#     225k. Quality 11/11 with one benign digest divergence. Note vllm#40969
-#     below did NOT reproduce: 150+ requests through FULL_AND_PIECEWISE plus
-#     chunked prefill, engine healthy afterwards.
+#   --enable-chunked-prefill: ADOPTED, and it took a second look to see why.
+#     The five-family run said decode -3.4% (t=-0.74), which is the noise floor
+#     talking: prose and chat carry sd ~13 tok/s. Re-measured on the peak family
+#     alone at n=20, where sd is ~3.9 and SE 1.23, decode is +0.54 tok/s
+#     (+0.8%, t=+0.44) - no cost, and the sign flipped. Prefill with 3 repeats
+#     per size: 8k 1761+-1023 -> 1942+-749 (unresolved, sd is 58% of the mean at
+#     that size), 32k 1898+-375 -> 2328+-138 (+23%, spreads barely overlap),
+#     100k 2137 -> 2171 (flat). Concurrency at a full window 1.63x -> 1.73x.
+#     Quality 11/11, one benign digest divergence. The single-shot "+83% at
+#     6.9k" and "+2.6 GiB KV" from the first pass did NOT survive repeats -
+#     both were single-sample artifacts.
 #
 #   max_num_batched_tokens 16384: WILL NOT BOOT at this window. The KV
 #     requirement rises 11.04 -> 17.85 GiB while availability falls 19.22 ->
@@ -199,11 +203,18 @@
 #     Costs decode: -7.7% overall (t=-1.60) and chat -23.1% (t=-2.56, the only
 #     per-family regression here besides k=7's prose). Quality 11/11.
 #
-# Nothing was adopted because both tradeoffs buy KV headroom this recipe does
-# not need: at 1M the pool already holds one maximal request plus most of a
-# second, and a 16-minute TTFT is not a workload that runs many of those at
-# once. If the goal ever becomes several concurrent long sessions rather than
-# one, max_num_batched_tokens 4096 is the lever, at about 8% of decode.
+# Only chunked prefill was adopted: it costs no measurable decode and buys +23%
+# prefill at 32k, which is agent-context range. The batched-token levers were
+# not, because they buy KV headroom this recipe does not need - at 1M the pool
+# already holds one maximal request plus most of a second, and a 16-minute TTFT
+# is not a workload that runs many of those at once. If the goal ever becomes
+# several concurrent long sessions rather than one, max_num_batched_tokens 4096
+# is the lever, at about 8% of decode.
+#
+# Two things to keep in view on the adopted flag. The 8k prefill point is still
+# unresolved (sd 58% of mean), so do not quote a short-prompt gain. And
+# vllm#40969 below is an open hang report against exactly this flag: not
+# reproduced here across 150+ requests, but not disproven either.
 #
 # KNOWN RISK: vllm-project/vllm#40969 (open) reports DeepSeek-V4-Flash hanging
 # after ~6 requests with cudagraph_mode=FULL_AND_PIECEWISE plus chunked prefill
@@ -269,6 +280,7 @@ command: |
       --max-num-batched-tokens {max_num_batched_tokens} \
       --gpu-memory-utilization {gpu_memory_utilization} \
       --enable-prefix-caching \
+      --enable-chunked-prefill \
       --tokenizer-mode deepseek_v4 \
       --tool-call-parser deepseek_v4 \
       --enable-auto-tool-choice \
