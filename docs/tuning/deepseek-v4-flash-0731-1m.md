@@ -202,13 +202,12 @@ quoted; |t| < 2 is unresolved, not a result. Baseline itself drifted 58.7 ->
   12.09, because larger chunks inflate both the per-request reservation and
   peak activation. Not a throughput question.
 
-- **max_num_batched_tokens 4096**: TRADEOFF, not adopted as of 2026-08-25,
+- **max_num_batched_tokens 4096**: TRADEOFF — ADOPTED 2026-08-25 (evening),
   and the largest lever found. KV pool 1.70M -> 2.89M tokens, 1.62x -> 2.76x
   at a full window. Costs decode: -7.7% overall (t=-1.60) and chat -23.1%
   (t=-2.56, the only per-family regression here besides k=7's prose).
-  Quality 11/11. This is the designated next lever once fleet contexts grow
-  past ~100k average or the fleet exceeds 12 sessions — see the fleet
-  campaign below.
+  Quality 11/11. Adoption rationale and trigger data in the fleet campaign
+  below.
 
 NOTHING from the 2026-08-22/23 campaign was adopted. Two of the four levers
 turned out to be defaults already in force, and the two that genuinely
@@ -302,6 +301,28 @@ Conclusions recorded:
 - max_num_batched_tokens 4096 (the pool lever above) remains NOT adopted -
   owner decision; it is the knob to revisit only if fleets wider than the
   sizing rule allows become a requirement.
+
+### max_num_batched_tokens 4096 adoption (2026-08-25 evening)
+
+Adopted after the post-change measurement, on measured demand rather than
+speculation. Context percentiles across 514 subagent requests that afternoon:
+p50 104,517 / p95 193,419 / p99 203,539 / max 214,675 tokens - long-lived
+agents drift to ~200k, so seats must be sized by the tail, not the median.
+The operator's normal pattern includes two concurrent orchestrators (2 x
+(parent + 4 subagents) = 10 sessions) plus ad-hoc side conversations; at
+tail-sized contexts that is ~1.7M+ tokens of working set against the 1.55M
+pool - the eviction cycle's exact trigger condition, observed live twice
+that day. The 2.89M pool holds two orchestrators plus side sessions with
+~30% headroom (thrash threshold moves from ~9 to ~15 concurrent sessions).
+The ~8% decode cost was accepted knowingly.
+
+Scope note: this adoption is for TP=2. When the cluster moves to TP=4
+(planned), re-run the A/B between 8192 and 4096 there - expectation is 8192
+wins at TP=4, whose ~6x pool makes seat count a non-issue, restoring the
+decode edge as the deciding factor.
+
+Client-side pairing (OMP): task.maxConcurrency 4 for two-orchestrator days,
+6 for single-orchestrator days; revive-bypass caveat above still applies.
 
 ## Known risk
 

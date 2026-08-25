@@ -11,8 +11,12 @@
 #     silently shorter window.
 #   max_num_seqs 12 / max_cudagraph_capture_size 128 (official 8 / 64) -
 #     fleet scheduling for concurrent agent sessions, adopted 2026-08-25.
-#     Not yet A/B-booted at the 1M window; if init fails on KV arithmetic,
-#     drop capture back to 64 first.
+#   max_num_batched_tokens 4096 (official 8192) - adopted 2026-08-25, same
+#     campaign: grows the KV pool 1.55M -> ~2.89M tokens so two concurrent
+#     orchestrators (10+ sessions at 100-200k contexts) fit cached, at a
+#     measured ~8% decode cost. TP=2 only: when this cluster moves to TP=4,
+#     A/B 8192 vs 4096 with the expectation that 8192 wins (seats stop
+#     binding at TP=4's much larger pool).
 #   --served-model-name deepseek-v4-flash-0731-1m - client-facing id so a
 #     1,048,576-token window is distinguishable from the base recipe's on the
 #     same port.
@@ -52,7 +56,7 @@ defaults:
   max_model_len: 1048576
   block_size: 256
   max_num_seqs: 12
-  max_num_batched_tokens: 8192
+  max_num_batched_tokens: 4096
   max_cudagraph_capture_size: 128
   num_speculative_tokens: 5
 
