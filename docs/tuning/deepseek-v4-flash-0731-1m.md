@@ -262,8 +262,46 @@ fix, costs graph coverage above 10 seqs) and record the numbers here.
 Client-facing behaviour is unchanged: same model, same window, same served
 name — scheduling does not change the math.
 
-**Post-change measurement: pending.** Rerun the same counters over a
-comparable window after the restart and record them here beside the baseline.
+### Post-change measurement (2026-08-25 afternoon)
+
+Server config as adopted (seqs 12, capture 128, batched 8192 unchanged; boot
+pool 1,548,133 tokens) plus a client-side spawn cap (OMP
+`task.maxConcurrency: 4`; agent contexts ~130k by this point, so 4-5
+concurrent sessions ~= 650k working set, well inside the pool).
+
+20-minute window, 60 s samples, fleet of 4 reviewers + parent (+1 unrelated
+single-request session):
+
+- generation: mean 77.0 tok/s, peak 105.1 (best of any regime measured);
+  minutes 14-18 at width 4-5 sustained 89-105 tok/s
+- prefix cache hit rate: mean 95.5%; replicate window mean 99.1%, min 91.2%
+- computed prefill: 283 tok/s average, bursty (the reviewers' legitimate
+  cold starts, absorbed without a throughput dent)
+- waiting: 0 in every sample; preemptions: 0; KV usage peaked at 41%
+
+Same day, same server config, fleet of 12-15 sessions (working set 1.5-1.9M
+tokens > pool): hit rate 0-7%, generation 3-9 tok/s, 1,600-3,900 tok/s of
+continuous re-prefill, agents 26-75 minutes between completed turns.
+Preemptions stayed 0 throughout - the mechanism is LRU eviction of idle
+sessions' cached prefixes, not overflow preemption, and it is binary: no
+middle regime was ever observed.
+
+Conclusions recorded:
+
+- seqs 12 did its job: at width 12 the engine reached 12 running / 0 waiting
+  (the old config pinned at 8/4) and briefly hit 47 tok/s aggregate before
+  cache churn caught up. Scheduling is no longer the constraint.
+- Throughput is governed entirely by cache fit: `sum(session contexts) <=
+  pool` is the operating invariant. Size client fan-out to
+  `pool / avg context` with ~30% headroom (4-6 sessions at 130k on this
+  pool). Aggregate throughput saturates by width ~4-5 anyway (~20 tok/s per
+  active stream), so wider fleets buy little even when they fit.
+- OMP caveat: `task.maxConcurrency` gates fresh spawns only; process
+  restarts cold-revive parked subagents around the semaphore and can
+  stampede the pool (observed: 11 revived at once under cap 4).
+- max_num_batched_tokens 4096 (the pool lever above) remains NOT adopted -
+  owner decision; it is the knob to revisit only if fleets wider than the
+  sizing rule allows become a requirement.
 
 ## Known risk
 
