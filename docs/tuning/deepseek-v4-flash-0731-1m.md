@@ -322,7 +322,19 @@ wins at TP=4, whose ~6x pool makes seat count a non-issue, restoring the
 decode edge as the deciding factor.
 
 Client-side pairing (OMP): task.maxConcurrency 4 for two-orchestrator days,
-6 for single-orchestrator days; revive-bypass caveat above still applies.
+6-8 for single-orchestrator days; revive-bypass caveat above still applies.
+
+Post-adoption measurement (same evening, 25-min window, single orchestrator
+at task.maxConcurrency 8): boot verified at KV pool 2,656,594 tokens (+72%).
+At 6-10 concurrent requests with hit rate >= 85%: generation mean 114.3
+tok/s, peak 134.4 - decisively above the width-4-5 record (~105 peak / 77
+mean), so aggregate decode on this pair still scales past width 5 and the
+bandwidth ceiling is >= 134 tok/s, not yet located at width 10. Hit rate
+96.4% mean, waiting 0, preemptions 0, KV usage <= 14% throughout. Earlier
+"aggregate is flat by c2" and "saturates by width ~5" readings were
+artifacts of cache-thrash-contaminated wide runs; discard them. Per-stream
+at width 9-10 is ~12-14 tok/s (vs ~20 at width 4-5) - width buys aggregate,
+not per-agent latency.
 
 ## Known risk
 
