@@ -1,0 +1,47 @@
+# GLM-5.3-Flash, LibertAIDAI NVFP4 (182 GiB), dedicated upstream image, TP=4.
+# Flag set is kingjones30's GB10-validated recipe (24.7-30.3 tok/s, MTP-5).
+#
+# Image prep:
+#   PREBUILT_RUNNER_IMAGE=vllm/vllm-openai:glm53-flash-arm64-cu130 \
+#     ./build-and-copy.sh -t vllm-node-glm5.3-flash -c
+#
+# --moe-backend marlin is mandatory on sm_121: the auto-selected
+# FLASHINFER_CUTLASS NvFp4 MoE backend produces silent garbage output.
+# Background, gotchas, and tuning levers: docs/GLM53_FLASH.md
+
+recipe_version: "1"
+name: GLM-5.3-Flash-NVFP4
+description: vLLM serving LibertAIDAI/GLM-5.3-Flash-NVFP4 on a 4x Spark cluster via the dedicated glm53-flash image
+
+model: LibertAIDAI/GLM-5.3-Flash-NVFP4
+container: vllm-node-glm5.3-flash
+
+cluster_only: true
+
+mods:
+  - mods/fix-glm53-nope-rope-pad
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 4
+  gpu_memory_utilization: 0.85
+  max_model_len: 262144
+  max_num_seqs: 1
+
+command: |
+  vllm serve LibertAIDAI/GLM-5.3-Flash-NVFP4 \
+      --trust-remote-code \
+      --port {port} \
+      --host {host} \
+      -tp {tensor_parallel} \
+      --distributed-executor-backend mp \
+      --gpu-memory-utilization {gpu_memory_utilization} \
+      --max-model-len {max_model_len} \
+      --max-num-seqs {max_num_seqs} \
+      --kv-cache-dtype fp8_ds_mla \
+      --language-model-only \
+      --moe-backend marlin \
+      --speculative-config '{{"method":"mtp","num_speculative_tokens":5}}' \
+      --tool-call-parser glm47 --enable-auto-tool-choice \
+      --reasoning-parser glm45
