@@ -1,0 +1,35 @@
+# GLM-5.3-Flash serving image for GB10 (sm_121): multimodal + Ray TP.
+# Single-file combination of MiaAI's two-layer build (kernel + mm-ray), from
+# MiaAI-Lab/GLM-5.3-Flash-NVFP4-Dual-DGX-Spark @aed98a13ca75 (MIT), with COPY
+# paths adapted to this repo (context = repo root, files in docker/glm53/).
+# Build: ./build-and-copy.sh handles it via the recipe's build_args, or:
+#   docker build -f Dockerfile.glm53-mm -t vllm-node-glm5.3-flash-mm .
+# Rationale for every pin: docs/GLM53_FLASH.md.
+FROM vllm/vllm-openai:glm53-flash-arm64-cu130
+
+# --- kernel layer (Mia's glm53-flash-sm121:v8) ------------------------------
+# Stock image routes SM12 to FLASHINFER_MLA_SPARSE_SM120 (packed DeepSeek
+# cache, pe_dim=64); the LibertAIDAI checkpoint is NoPE (pe_dim=0). Pin
+# FlashInfer 0.6.18 (SM90 NoPE MLA + FA2 on GB10), drop the SM120 cubin
+# cache, restore NCCL 2.30.7 (CX7) and cutlass-dsl 4.6.2 (GB10 CuTeDSL),
+# then apply the SM121 source patch (default sm90 mode).
+RUN pip install -q --pre \
+      flashinfer-python==0.6.18.dev20260819 \
+      flashinfer-cubin==0.6.18.dev20260819 \
+      --extra-index-url https://flashinfer.ai/whl/nightly/ \
+    && pip uninstall -q -y flashinfer-jit-cache
+RUN pip install -q nvidia-nccl-cu13==2.30.7 \
+    && pip show nvidia-nccl-cu13 | grep -q "Version: 2.30.7"
+RUN pip install -q nvidia-cutlass-dsl==4.6.2 \
+    && pip show nvidia-cutlass-dsl | grep -q "Version: 4.6.2"
+COPY docker/glm53/glm53-flash_SM121.py /tmp/glm53-flash_SM121.py
+RUN python3 /tmp/glm53-flash_SM121.py && rm /tmp/glm53-flash_SM121.py
+
+# --- serving layer (Mia's mm-ray-v1) ----------------------------------------
+ENV TORCH_CUDA_ARCH_LIST=12.1a \
+    FLASHINFER_CUDA_ARCH_LIST=12.1a \
+    FLASHINFER_DISABLE_VERSION_CHECK=1 \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    VLLM_ENGINE_READY_TIMEOUT_S=3600
+RUN pip install --no-cache-dir "ray[default]==2.58.0"
+COPY docker/glm53/chat_template.jinja /opt/glm53/chat_template.jinja
