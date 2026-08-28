@@ -72,18 +72,34 @@ against).
 Choose by workload: text-only single-stream quality/graphs -> the base
 recipe; agents with images and concurrency -> this one.
 
-## DFlash2: the next speed step (watch item, not yet runnable here)
+## The EXL3 variant (recipes/glm-5.3-flash-exl3.yaml) - primary
 
-DFlash2 is z-lab's block-diffusion drafter (drafts a whole block per pass;
-2.4-2.8x measured on GLM-5.3-Flash at TP=4 on GB300s). A ready drafter
-exists: incoai/GLM-5.3-Flash-DFlash2. Blockers for this cluster, checked
-2026-08-28:
-  1. Engine support is SGLang-only via unmerged PR sgl-project/sglang#36708
-     (vLLM support announced, not shipped).
-  2. The draft path requires the fa4 attention backend - the same
-     CuTe-DSL kernel family that fails MLIR compilation on sm_121 (what the
-     qwen38fn Triton-fallback patch works around). A GB10 run needs an
-     equivalent fallback for the drafter.
-Revisit when the SGLang PR merges or a GB10 deployment is published; the
-expected payoff is ~25 -> 40-50 tok/s single-stream, which would also reopen
-the engine question for GLM.
+Replicates MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks (@c91754f151ce): EXL3
+kernels executing inside vLLM's serving layer via Mia's prebuilt overlay
+image (ghcr.io/miaai-lab/glm-5.3-flash-2x-dgx-sparks:exl3, FROM the
+dedicated glm53 image; includes the aarch64 AVX-stub compile patch, NoPE
+zero-pad into fp8_ds_mla geometry, and video-placeholder fixes).
+
+Why it is primary - all measured by Mia on GB10:
+  - 62.9 tok/s x1 / 146.5 aggregate x4: 2.1-2.5x the NVFP4+MTP variants,
+    driven by DFlash2 spec decode (k=7, 0.918 acceptance, 6.43 tok/step).
+  - Quality: teacher-logit KLD 0.024555 vs official FP8's 0.024629 (1.00x)
+    at 54% of the bytes. Checkpoint: brandonmusic tr3-4bpw (164 GiB,
+    mirrored as Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw), uniform-K4 routed
+    experts. TR3 K6 (254 GiB) exists if quality headroom is ever wanted.
+  - 900k context (native-1M "still does not allocate"), fp8_ds_mla KV.
+
+Constraints (Mia's, verbatim spirit): no --moe-backend marlin, no
+TRITON_ATTN for drafts, no bf16 KV, no NVFP4 KV (FlashInfer SM12x NVFP4
+kernels are dense MHA, not sparse MLA); prefix caching is block-aligned
+only. The DFlash2 drafter (incoai/GLM-5.3-Flash-DFlash2) must be present in
+every node's HF cache.
+
+## DFlash2 status (updated 2026-08-28)
+
+Contrary to the earlier watch-item assessment, DFlash2 IS running on GB10 -
+in the EXL3 stack above, on vLLM, with draft KV forced to bf16/auto and
+non-causal draft attention handled by Mia's overlay. The SGLang path
+(PR sgl-project/sglang#36708, fa4 draft backend) remains blocked on sm_121.
+A DFlash2 drafter for Qwen3.8-Flash-Next exists on the same lineage; porting
+this overlay approach to the qwen lane is a candidate speed experiment.
