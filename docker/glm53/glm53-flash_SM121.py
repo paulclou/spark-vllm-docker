@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """SM121 kernel patches for GLM-5.3-Flash-NVFP4 on GB10.
 
+Vendored from MiaAI-Lab/GLM-5.3-Flash-NVFP4-Dual-DGX-Spark (MIT,
+@aed98a13ca75), unmodified — first-person comments below are Mia's, from
+her 2x GB10 deployment (:8888, TP2).
+
 This Spark recipe runs this once while building glm53-flash-sm121:v8
 (GB10 / SM121). The serving tag on top is MM + Ray TP2 with the OpenAI API
 on :8888. Stock glm53-flash-arm64-cu130 only lists SM120 packed MLA on

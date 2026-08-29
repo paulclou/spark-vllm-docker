@@ -1,5 +1,9 @@
 FROM vllm/vllm-openai:glm53-flash-arm64-cu130
 
+# Vendored from MiaAI-Lab/GLM-5.3-Flash-NVFP4-Dual-DGX-Spark (MIT,
+# @aed98a13ca75), unmodified — kept as reference; the repo build uses the
+# folded Dockerfile.glm53-mm. First-person comments below are Mia's.
+#
 # Spark kernel layer (local tag glm53-flash-sm121:v8).
 # This 2× GB10 kit serves MM + Ray on :8888 from the mm-ray tag on top.
 #
