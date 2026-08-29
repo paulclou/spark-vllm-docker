@@ -29,6 +29,11 @@ defaults:
   max_model_len: 262144
   max_num_seqs: 1
 
+# Required: fix-glm53-nope-rope-pad is env-gated; without this the patch is
+# dormant and boot dies with "pe_dim must be 64 for fp8_ds_mla".
+env:
+  VLLM_MLA_NOPE_PAD_ROPE: "1"
+
 command: |
   vllm serve LibertAIDAI/GLM-5.3-Flash-NVFP4 \
       --trust-remote-code \
