@@ -293,5 +293,13 @@ reasoning. Rule for ALL evals against endpoints with a reasoning parser:
 budget must cover thinking + answer (max_gen_toks >= 1024 for RULER), a
 stricter form of the max_gen_toks trap already in this file.
 
-Still unmeasured on the serve config: >131K prompts, MM inference,
-DFlash2 acceptance under 16-seat concurrency.
+MM inference VALIDATED on the serve config (2026-08-30 smoke probes,
+tony image, no --language-model-only): a shapes/colors/text image and a
+bar chart both described exactly (all shapes, positions, colors, the
+rendered word, chart values and the odd-colored bar) in 1.5-2.8 s at
+~300-385 prompt tokens. The vision front-end costs no extra flags on
+this stack; probe scripts in the session scratchpad.
+
+Still unmeasured on the serve config: >131K prompts, DFlash2 acceptance
+under 16-seat concurrency, MM under load/large images (probes were
+smoke-grade).
