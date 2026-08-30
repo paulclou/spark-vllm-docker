@@ -313,6 +313,39 @@ reasoning. Rule for ALL evals against endpoints with a reasoning parser:
 budget must cover thinking + answer (max_gen_toks >= 1024 for RULER), a
 stricter form of the max_gen_toks trap already in this file.
 
+### Reasoning-effort dial - measured (2026-08-30, live endpoint)
+
+12-cell matrix: low/high/max/unset x three difficulty tiers, greedy
+(temperature 0), single stream. Times include API overhead.
+
+| Prompt tier | low | high | max | default (unset) |
+| --- | --- | --- | --- | --- |
+| easy arithmetic | 16 tok, 0.5s, OK | 20 tok, 0.6s, OK | 55 tok, 1.0s, OK | 55 tok, 1.0s, OK |
+| 3-way logic puzzle | 114 tok, 2.4s, OK | 236 tok, 4.3s, OK | 211 tok, 3.6s, OK | 328 tok, 7.0s, OK |
+| competition math (AIME-style) | 444 tok, 9.4s, WRONG | 863 tok, 16.9s, WRONG | 7606 tok, 122s, OK | 7997 tok, 124s, OK |
+
+Findings:
+
+- **default == max**, confirmed behaviorally (identical outputs on the
+  easy tier; same solve + same-scale budget on the hard tier). The
+  template maps anything outside ['low','high'] to max.
+- **Effort scales with difficulty, dramatically at the top**: on hard
+  problems max thinks ~9-17x longer than high - and was the ONLY level
+  that answered correctly (738; low said 657, high said 648, both
+  confidently wrong). Token growth low->high->max is monotone on easy
+  and hard; on the mid tier high ~= max within run noise.
+- **Do NOT default the server to high**: it reads as "max but cheaper"
+  until a genuinely hard problem arrives, where it fails where max
+  succeeds. Keep the server default at max (the recipe does, by
+  omission); latency-sensitive clients opt DOWN per request with
+  chat_template_kwargs {"reasoning_effort": "low"|"high"}.
+- **Temp-0 is not bit-deterministic on this stack**: a repeated cell
+  gave 243 vs 236 tokens, and unset-vs-max diverged on the mid tier
+  (328 vs 211) despite identical templates - continuous-batching /
+  MoE reduction-order float noise, plus probabilistic drafting.
+  Expect ~5-50% token-count variance between identical greedy runs;
+  don't read single-run token counts as exact.
+
 MM inference VALIDATED on the serve config (2026-08-30 smoke probes,
 tony image, no --language-model-only): a shapes/colors/text image and a
 bar chart both described exactly (all shapes, positions, colors, the
