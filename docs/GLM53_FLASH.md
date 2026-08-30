@@ -30,7 +30,15 @@ serving flags are theirs verbatim.
 
 1. **FP4 MoE corruption**: the auto-selected FLASHINFER_CUTLASS NvFp4 MoE
    backend produces degenerate repeated-token output on sm_121 with no
-   error. `--moe-backend marlin` is mandatory.
+   error. `--moe-backend marlin` is mandatory. Root cause per the
+   LibertAI card ("check your output before trusting it"): the
+   checkpoint originally shipped no MoE input_scale, and vLLM's fused
+   NVFP4 path silently defaults it to 1.0; marlin dequantizes weights
+   and never reads an activation scale. This also plausibly explains
+   tonyd2wild's "intermittent corrupted token IDs" report as a
+   serving-stack bug rather than checkpoint damage - which downgrades
+   the parked LibertAI-corruption risk for marlin-backed deployments
+   like ours.
 2. **Autotune false hang**: a 60+ minute "No available shared memory
    broadcast block found" loop at first boot is FlashInfer autotuning, not a
    hang (CPU >150% = still working). Caches persist to `~/.cache/vllm`;
@@ -274,10 +282,22 @@ Thinking/parser findings (probed on the live endpoint):
   prior turns' think blocks from the prompt; set false only for
   benchmark repro/debugging of multi-turn reasoning.
 - Reasoning arrives in message.reasoning (NOT reasoning_content) in this
-  vLLM build. An early probe read the wrong field and blamed the glm45
-  parser for discarding think blocks - glm45 (the official recipe's
-  choice) is not disproven. deepseek_r1 is kept per the LibertAI model
-  card and is probe-verified working.
+  vLLM build - the LibertAI card documents the same field quirk.
+- deepseek_r1 is the card-MANDATED vLLM parser: the card documents that
+  stock vLLM's glm45 resolves to the GLM-4.7 parser, expects <think> in
+  the output while this template emits it as the last PROMPT token, and
+  "silently discards the whole reply" (content and reasoning_content
+  both empty). Nuance: on tonyd2wild's custom build glm45 demonstrably
+  produced content (our bench campaign ran on it), so his image likely
+  patches the parser - but on stock images glm45 is a landmine, and the
+  official vLLM recipe + both Mia configs carry it.
+- tony's launcher passes enable_thinking:false - a confirmed no-op: the
+  checkpoint template handles only reasoning_effort and clear_thinking.
+  His published numbers therefore ran with full max-effort thinking.
+- The checkpoint's generation_config.json carries temperature 1.0 /
+  top_p 0.95 (zai's own eval sampling) - vLLM serves those as the
+  sampling defaults for clients that set none. Aligned by default; our
+  temp-0 runs were explicit benchmark choices.
 
 Smoke status (final config, 2026-08-30): boots ~15 min; 72,218-token
 needle exact in 36.6s; reasoning present; effort dial works; glm47 tool
