@@ -12,6 +12,10 @@
 # GPU in the first sparse-MLA dummy run). The image's DFlash2 overlay is
 # inert under this MTP config; the CC BY-NC-ND DFlash2 drafter is NOT loaded.
 #
+# kv-cache-dtype is plain fp8 (tonyd2wild's launcher): his image has no
+# fp8_ds_mla NoPE pad (that path needs pe_dim=64 and belongs to the
+# stock-image + runtime-mod stack); fp8_ds_mla here dies at boot.
+#
 # --moe-backend marlin is mandatory on sm_121: the auto-selected
 # FLASHINFER_CUTLASS NvFp4 MoE backend produces silent garbage output.
 # Background, gotchas, and tuning levers: docs/GLM53_FLASH.md
@@ -43,7 +47,7 @@ command: |
       --gpu-memory-utilization {gpu_memory_utilization} \
       --max-model-len {max_model_len} \
       --max-num-seqs {max_num_seqs} \
-      --kv-cache-dtype fp8_ds_mla \
+      --kv-cache-dtype fp8 \
       --language-model-only \
       --moe-backend marlin \
       --speculative-config '{{"method":"mtp","num_speculative_tokens":5}}' \
