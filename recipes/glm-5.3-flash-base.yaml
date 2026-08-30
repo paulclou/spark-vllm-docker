@@ -1,0 +1,57 @@
+# GLM-5.3-Flash base recipe - ground-up from the official vLLM recipe
+# (recipes.vllm.ai GLM-5.3-Flash, multi-node TP, spec-decoding profile),
+# adapted to 4x Spark with ONLY the changes GB10 requires. Everything the
+# official recipe leaves at vLLM defaults stays at vLLM defaults here.
+#
+# From the official recipe, unchanged: kv-cache-dtype fp8, MTP-5
+# speculative config (license-clean, no external drafter), glm47 tool
+# parser + auto tool choice, glm45 reasoning parser.
+#
+# GB10-required deviations (each is load-bearing, see docs/GLM53_FLASH.md):
+#   image: official x86 vllm/vllm-openai:glm53-flash cannot run on aarch64
+#     GB10; use tonyd2wild's sm121 build (the TP4-validated arm64 image).
+#   --moe-backend marlin: sm_121 auto-select picks FLASHINFER_CUTLASS,
+#     which produces silent garbage output.
+#   mods/fix-glm53-topk-sm120: without it any request >32K crashes the
+#     engine (persistent_topk unlaunchable on GB10; issue #27).
+#   checkpoint pinned by snapshot path: upstream README pushes move
+#     refs/main to sparse revisions and break Glm5NextProcessor loading.
+#   node wiring (--nnodes/--node-rank/--master-addr, NCCL ifaces) is
+#     generated per node by launch-cluster.sh, not written here.
+#
+# Model: LibertAIDAI NVFP4 (kept per 2026-08-30 decision; the official
+# recipe's RedHatAI NVFP4 is unvalidated on GB10).
+
+recipe_version: "1"
+name: GLM-5.3-Flash-Base
+description: GLM-5.3-Flash NVFP4 on 4x Spark - official vLLM recipe skeleton with only the GB10-mandatory deviations
+
+model: LibertAIDAI/GLM-5.3-Flash-NVFP4
+container: vllm-node-glm5.3-flash
+
+cluster_only: true
+
+mods:
+  - mods/fix-glm53-topk-sm120
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 4
+
+env:
+  VLLM_ENGINE_READY_TIMEOUT_S: "3600"
+  HF_HUB_OFFLINE: "1"
+
+command: |
+  vllm serve /root/.cache/huggingface/hub/models--LibertAIDAI--GLM-5.3-Flash-NVFP4/snapshots/357b45cc73a07a541cede88861f7736c9487ebf7 \
+      --served-model-name glm-5.3-flash \
+      --port {port} \
+      --host {host} \
+      --tensor-parallel-size {tensor_parallel} \
+      --kv-cache-dtype fp8 \
+      --moe-backend marlin \
+      --tool-call-parser glm47 \
+      --enable-auto-tool-choice \
+      --reasoning-parser glm45 \
+      --speculative-config '{{"method":"mtp","num_speculative_tokens":5}}'
