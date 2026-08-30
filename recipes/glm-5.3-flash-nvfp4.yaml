@@ -31,6 +31,9 @@ defaults:
 
 # Required: fix-glm53-nope-rope-pad is env-gated; without this the patch is
 # dormant and boot dies with "pe_dim must be 64 for fp8_ds_mla".
+# FlashInfer autotune is disabled: at TP=4 its cross-rank tactic-timing sync
+# deadlocks in a sparse-MLA op (all ranks spin at 96% GPU indefinitely).
+# MoE runs on marlin, so the main autotune beneficiary is unaffected.
 env:
   VLLM_MLA_NOPE_PAD_ROPE: "1"
 
@@ -48,5 +51,6 @@ command: |
       --language-model-only \
       --moe-backend marlin \
       --speculative-config '{{"method":"mtp","num_speculative_tokens":5}}' \
+      --kernel-config '{{"enable_flashinfer_autotune": false}}' \
       --tool-call-parser glm47 --enable-auto-tool-choice \
       --reasoning-parser glm45
