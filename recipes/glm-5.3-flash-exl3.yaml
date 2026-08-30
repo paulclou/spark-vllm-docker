@@ -22,13 +22,14 @@ cluster_only: true
 
 mods:
   - mods/drop-caches
+  - mods/fix-glm53-topk-sm120
 
 defaults:
   port: 8000
   host: 0.0.0.0
   tensor_parallel: 4
   gpu_memory_utilization: 0.87
-  max_model_len: 32768
+  max_model_len: 131072
   max_num_seqs: 4
   num_speculative_tokens: 7
 
@@ -40,12 +41,11 @@ env:
 # --language-model-only: the multimodal front-end warmup (~15.7 GiB on the
 # API node) OOM-killed the boot on 121 GiB unified memory at 0.87 util.
 # Text-only also matches the NVFP4 recipe for benchmark parity.
-# max_model_len capped at 32768: on GB10 (101KB smem/SM) the GLM sparse
-# indexer's persistent_topk kernel cannot launch (needs 128KB for its
-# fallback; fails at boot profiling for any max_model_len that engages the
-# sparse path, and at request time past ~32K tokens on serving stacks that
-# boot). Applies to both the NVFP4 and EXL3 images - hardware ceiling,
-# not a config bug. 900000 was Mia's TP2 value; TP4 geometry hits the wall.
+# max_model_len 131072 requires mods/fix-glm53-topk-sm120: without it any
+# request >32K (sparse-indexer activation) kills the engine on GB10
+# (persistent_topk unlaunchable: 48-CTA budget vs 77-90 needed, FilteredTopK
+# needs 128KB smem vs 101KB). See issue #27. Mia's nominal 900000 exceeds
+# the ~346K-token KV pool at TP4 and cannot boot regardless.
 command: |
   # Serve by local snapshot path, not HF id: Glm5NextProcessor.from_pretrained
   # does a raw open(<model>/processor_config.json), which only resolves for a
