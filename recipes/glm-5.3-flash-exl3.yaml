@@ -20,6 +20,9 @@ container: vllm-node-glm5.3-flash-exl3
 
 cluster_only: true
 
+mods:
+  - mods/drop-caches
+
 defaults:
   port: 8000
   host: 0.0.0.0
@@ -34,6 +37,9 @@ env:
   VLLM_ENGINE_READY_TIMEOUT_S: "3600"
   NCCL_IB_GID_INDEX: "3"
 
+# --language-model-only: the multimodal front-end warmup (~15.7 GiB on the
+# API node) OOM-killed the boot on 121 GiB unified memory at 0.87 util.
+# Text-only also matches the NVFP4 recipe for benchmark parity.
 # max_model_len capped at 32768: on GB10 (101KB smem/SM) the GLM sparse
 # indexer's persistent_topk kernel cannot launch (needs 128KB for its
 # fallback; fails at boot profiling for any max_model_len that engages the
@@ -54,10 +60,9 @@ command: |
       --max-model-len {max_model_len} \
       --max-num-seqs {max_num_seqs} \
       --kv-cache-dtype fp8_ds_mla \
+      --language-model-only \
       --enable-prefix-caching \
       --no-enable-flashinfer-autotune \
-      --skip-mm-profiling \
-      --limit-mm-per-prompt '{{"image": 4, "video": 1}}' \
       --cudagraph-capture-sizes 1 2 4 8 16 24 32 \
       --speculative-config '{{"method":"dflash","model":"incoai/GLM-5.3-Flash-DFlash2","num_speculative_tokens":{num_speculative_tokens},"kv_cache_dtype":"auto","draft_sample_method":"probabilistic","rejection_sample_method":"standard"}}' \
       --tool-call-parser glm47 --enable-auto-tool-choice \
