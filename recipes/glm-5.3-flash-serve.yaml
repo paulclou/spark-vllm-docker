@@ -19,9 +19,16 @@
 #     long-prompt prefill (tony's validated value).
 #
 # Serving choices (Paul, 2026-08-30): --served-model-name glm-5.3-flash-nvfp4
-# (official omits; clients get a stable alias) and thinking ON by default
-# via --default-chat-template-kwargs (this build's template defaults off;
-# clients opt out per-request with chat_template_kwargs).
+# (official omits; clients get a stable alias). Thinking is ALWAYS ON in
+# this model (no enable_thinking in the template); clients dial it with
+# chat_template_kwargs {"reasoning_effort": "low"|"high"|"max"} (default
+# max; probe: low = ~50 think tokens / 1.5s vs max ~310 / 7.8s).
+# clear_thinking=true strips prior turns' think blocks from the prompt
+# (zai's chat recommendation; content is untouched).
+# --reasoning-parser deepseek_r1, NOT glm45: probed 2026-08-30 - glm45 on
+# vLLM silently discards the think block (reasoning_content empty, ~300
+# tokens lost per reply); deepseek_r1 per LibertAI's card. Doc priority
+# for deviations: vLLM official -> LibertAI -> Mia -> tony (Paul).
 #
 # GB10-mandatory: --gpu-memory-utilization 0.85 - vLLM's default (0.92 in
 # this build, 111.95 GiB) exceeds GB10 UMA free memory at boot (110.19 of
@@ -76,6 +83,6 @@ command: |
       --moe-backend marlin \
       --tool-call-parser glm47 \
       --enable-auto-tool-choice \
-      --reasoning-parser glm45 \
+      --reasoning-parser deepseek_r1 \
       --speculative-config '{{"method":"mtp","num_speculative_tokens":5}}' \
-      --default-chat-template-kwargs '{{"enable_thinking": true}}'
+      --default-chat-template-kwargs '{{"clear_thinking": true}}'
