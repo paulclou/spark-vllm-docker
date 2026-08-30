@@ -1,6 +1,7 @@
 # GLM-5.3-Flash on this cluster
 
-Background for `recipes/glm-5.3-flash-nvfp4.yaml`.
+Background for `recipes/glm-5.3-flash-nvfp4.yaml` (the production serve
+config) and the reference ports in `docs/reference-recipes/`.
 
 ## Model and checkpoint choice
 
@@ -50,7 +51,7 @@ compacts the kpool indexer top-k table 2176 -> 2048. Required for
   first tuning experiment at TP=4 (watch the MLA + KDA state pools).
 - MTP-5 speculative decoding is in the base config (validated ~1.7-2x).
 
-## The MM variant (recipes/glm-5.3-flash-nvfp4-mm.yaml)
+## The MM variant (docs/reference-recipes/glm-5.3-flash-nvfp4-mm.yaml)
 
 Replicates MiaAI-Lab/GLM-5.3-Flash-NVFP4-Dual-DGX-Spark (MIT, @aed98a13ca75):
 multimodal on, max_num_seqs 8, fp8_e4m3 KV, MTP-4, Ray executor (launch with
@@ -69,10 +70,11 @@ native path fallback triggers on cudaErrorNoKernelImageForDevice - loud,
 unlike the silent FLASHINFER_CUTLASS garbage the text-only variant guards
 against).
 
-Choose by workload: text-only single-stream quality/graphs -> the base
-recipe; agents with images and concurrency -> this one.
+Superseded for images: the production recipe serves MM natively (validated
+2026-08-30). This port remains the only Ray/concurrency-validated MM path
+(author-validated at TP2; never booted on our cluster).
 
-## The EXL3 variant (recipes/glm-5.3-flash-exl3.yaml) - primary
+## The EXL3 variant (docs/reference-recipes/glm-5.3-flash-exl3.yaml)
 
 Replicates MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks (@c91754f151ce): EXL3
 kernels executing inside vLLM's serving layer via Mia's prebuilt overlay
@@ -80,7 +82,8 @@ image (ghcr.io/miaai-lab/glm-5.3-flash-2x-dgx-sparks:exl3, FROM the
 dedicated glm53 image; includes the aarch64 AVX-stub compile patch, NoPE
 zero-pad into fp8_ds_mla geometry, and video-placeholder fixes).
 
-Why it is primary - all measured by Mia on GB10:
+Why it was considered (superseded by the TP=4 measurements below - the
+NVFP4 production recipe wins every speed metric): Mia's GB10 numbers:
   - 62.9 tok/s x1 / 146.5 aggregate x4: 2.1-2.5x the NVFP4+MTP variants,
     driven by DFlash2 spec decode (k=7, 0.918 acceptance, 6.43 tok/step).
   - Quality: teacher-logit KLD 0.024555 vs official FP8's 0.024629 (1.00x)
@@ -197,7 +200,12 @@ image switch); Glm5NextProcessor requires a local model path (HF id form
 crashes); EXL3 multimodal warmup OOM on 121 GiB UMA (--language-model-only);
 the 32K topk ceiling (mod above).
 
-## The serve recipe (recipes/glm-5.3-flash-serve.yaml, 2026-08-30)
+## The serve recipe (recipes/glm-5.3-flash-nvfp4.yaml, 2026-08-30)
+
+(Formerly glm-5.3-flash-serve.yaml; renamed when the reference ports moved
+to docs/reference-recipes/ and this became the sole launchable GLM recipe.
+The tony-flags bench config it was measured against is now
+docs/reference-recipes/glm-5.3-flash-nvfp4-bench.yaml.)
 
 Production config, built ground-up as a replication of the official vLLM
 recipe (recipes.vllm.ai GLM-5.3-Flash, GB200 NVL4 profile) with exactly
