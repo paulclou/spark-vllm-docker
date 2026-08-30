@@ -1,0 +1,52 @@
+# GLM-5.3-Flash serve - replication of the official vLLM recipe
+# (recipes.vllm.ai GLM-5.3-Flash, multi-node TP profile).
+#
+# Contract (Paul, 2026-08-30): replicate the official recipe EXCEPT
+#   1. image      - official x86 vllm/vllm-openai:glm53-flash cannot run on
+#                   aarch64 GB10; tonyd2wild sm121 build via
+#                   PREBUILT_RUNNER_IMAGE=ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2 \
+#                     ./build-and-copy.sh -t vllm-node-glm5.3-flash -c
+#   2. checkpoint - LibertAIDAI NVFP4 (official offers RedHatAI NVFP4/FP8/BF16)
+#   3. TP x nodes - 4 x 1-GPU Sparks (official example: 8 x 2); node wiring
+#                   (--nnodes/--node-rank/--master-addr, IFACE env) is
+#                   generated per node by launch-cluster.sh
+# Everything else replicates the official command; vLLM defaults untouched.
+#
+# Two survival additions, both boot/correctness-mandatory on this stack
+# (not tuning): --trust-remote-code (LibertAIDAI checkpoint refuses to load
+# without it) and --moe-backend marlin (sm_121 auto-select emits silent
+# garbage). mods/fix-glm53-topk-sm120 rides the launcher, not the command
+# (>32K requests crash the engine without it; issue #27).
+
+recipe_version: "1"
+name: GLM-5.3-Flash-Serve
+description: GLM-5.3-Flash on 4x Spark - official vLLM recipe replicated; image, checkpoint, and topology adapted
+
+model: LibertAIDAI/GLM-5.3-Flash-NVFP4
+container: vllm-node-glm5.3-flash
+
+cluster_only: true
+
+mods:
+  - mods/fix-glm53-topk-sm120
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 4
+
+env:
+  VLLM_ENGINE_READY_TIMEOUT_S: "3600"
+
+command: |
+  vllm serve LibertAIDAI/GLM-5.3-Flash-NVFP4 \
+      --trust-remote-code \
+      --port {port} \
+      --host {host} \
+      --tensor-parallel-size {tensor_parallel} \
+      --kv-cache-dtype fp8 \
+      --moe-backend marlin \
+      --tool-call-parser glm47 \
+      --enable-auto-tool-choice \
+      --reasoning-parser glm45 \
+      --speculative-config '{{"method":"mtp","num_speculative_tokens":5}}'
