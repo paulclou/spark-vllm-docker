@@ -19,6 +19,11 @@
 #     (one-shot per node at launch); revisit if weight load OOMs.
 #   - his docker --memory 112g pin not applied (eugr launcher owns docker args).
 #
+# kv-cache-memory pin removed (Paul, 2026-08-30): tony pins 24 GiB/rank,
+# but the protocol-matched A/B proved no quality or speed benefit and the
+# auto pool is 1.85x larger (7.2M vs 3.9M tokens). Sole deviation from
+# tony's launcher flags.
+#
 # mods/fix-glm53-topk-sm120 unlocks requests >32K tokens on GB10: without
 # it the sparse indexer's persistent_topk kernel cannot launch (needs
 # 128KB smem/block or a 48-CTA persistent budget; GB10 has 101KB/48) and
@@ -80,7 +85,6 @@ command: |
       --block-size 2304 \
       --max-num-batched-tokens 8192 \
       --kv-cache-dtype fp8_e4m3 \
-      --kv-cache-memory 25769803776 \
       --enforce-eager \
       --moe-backend marlin \
       --speculative-config '{{"method":"dflash","model":"incoai/GLM-5.3-Flash-DFlash2","num_speculative_tokens":7}}' \

@@ -133,16 +133,15 @@ nodes (pool unchanged: 1,197,617 vs 1,215,058 unflushed). NVFP4 pins
 residue after vLLM profiles Mia's stack (EXL3 workspaces + CUDA graphs)
 under her 0.87 util fraction. An explicit kv-cache-memory pin would grow
 the EXL3 pool but is deliberately not applied (kept faithful to Mia's
-config). The NVFP4 pin was A/B'd unpinned (2026-08-30): the
-profiler hands KV ~44 GiB/rank (7.2M tokens, 1.85x) BUT the unpinned
-config measurably degrades - 131K retrieval 9/16 across two runs vs
-the pinned config's 25/25, and decode variance +/-5.0 vs +/-0.5 tok/s
-(means near parity; prefill parity). Mechanism unknown (pool size
-should not affect accuracy; suspects: sparse-indexer behavior at
-larger block tables, UMA pressure at 131K prefill peaks). The 24
-GiB/rank pin is therefore load-bearing on this stack and stays.
-The Mia backports mod was exonerated by the same A/B (degradation
-reproduces without it).
+config). The NVFP4 pin was A/B'd unpinned (2026-08-30). An initial
+run suggested unpinned degraded 131K retrieval, but that was a
+measurement artifact (truncated generation budget - the same trap as
+the ruler_vt scores). The protocol-matched retest (n=25, 256-token
+budget) scored 1.00 / 0.96 / 1.00 at 131,072 tokens - statistically
+identical to pinned - with the 1.85x larger auto pool (7.2M tokens,
+~44 GiB/rank). Verdict: the pin has no measured benefit on this stack;
+both fork recipes now run unpinned (auto). The Mia backports mod was
+exonerated by the same A/B.
 | Max-context concurrency | 3.7 @1M / 14.8 @262K | 9.3 @131K |
 
 Takeaways:
