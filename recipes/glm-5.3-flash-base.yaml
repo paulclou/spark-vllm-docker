@@ -16,6 +16,9 @@
 #     engine (persistent_topk unlaunchable on GB10; issue #27).
 #   checkpoint pinned by snapshot path: upstream README pushes move
 #     refs/main to sparse revisions and break Glm5NextProcessor loading.
+#   --trust-remote-code: required by the LibertAIDAI checkpoint (custom
+#     glm5_next processor code); the official recipe's RedHatAI checkpoint
+#     apparently does not need it. Every working LibertAIDAI boot uses it.
 #   node wiring (--nnodes/--node-rank/--master-addr, NCCL ifaces) is
 #     generated per node by launch-cluster.sh, not written here.
 #
@@ -46,6 +49,7 @@ env:
 command: |
   vllm serve /root/.cache/huggingface/hub/models--LibertAIDAI--GLM-5.3-Flash-NVFP4/snapshots/357b45cc73a07a541cede88861f7736c9487ebf7 \
       --served-model-name glm-5.3-flash \
+      --trust-remote-code \
       --port {port} \
       --host {host} \
       --tensor-parallel-size {tensor_parallel} \
