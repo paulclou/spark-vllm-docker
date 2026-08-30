@@ -62,7 +62,12 @@ env:
   HF_HUB_OFFLINE: "1"
 
 command: |
-  vllm serve LibertAIDAI/GLM-5.3-Flash-NVFP4 \
+  # Serve by pinned snapshot path: upstream README-only pushes move the HF
+  # cache's refs/main to sparse undownloaded revisions (any online tool
+  # refreshes it), and Glm5NextProcessor open()s files relative to the
+  # model argument. 357b45cc is the fully-downloaded, benchmark-validated
+  # revision.
+  vllm serve /root/.cache/huggingface/hub/models--LibertAIDAI--GLM-5.3-Flash-NVFP4/snapshots/357b45cc73a07a541cede88861f7736c9487ebf7 \
       --served-model-name glm-5.3-flash \
       --trust-remote-code \
       --port {port} \
