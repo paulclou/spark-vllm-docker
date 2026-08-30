@@ -262,7 +262,36 @@ Thinking/parser findings (probed on the live endpoint):
 Smoke status (final config, 2026-08-30): boots ~15 min; 72,218-token
 needle exact in 36.6s; reasoning present; effort dial works; glm47 tool
 calls structured correctly; KV pool 6,692,504 tokens (~6.4 full 1M
-sessions, ~25 @262K, 16-seat cap). Not yet formally measured on THIS
-config: benchy/GSM8K/RULER (bench-recipe numbers above are the
-reference), >131K prompts, MM inference, DFlash2 acceptance under
-concurrency.
+sessions, ~25 @262K, 16-seat cap).
+
+### Serve-config formal campaign (2026-08-30, protocol matched to the
+### bench campaign above)
+
+| Metric | Serve config | Bench reference |
+| --- | --- | --- |
+| Decode tg128 | 65.2 +/- 5.1 tok/s (peak 77.3) | 52.5 +/- 0.5 |
+| Prefill pp2048 | 1501 +/- 64 tok/s | 1792 +/- 89 |
+| TTFT @2K | 1.37 s | 1.15 s |
+| GSM8K 200q (flex/strict) | 90.0 / 88.0 % | 89.0 / 87.5 % |
+| RULER s2/mk1 8K-131K | 1.0 / 1.0 at every length | same |
+| ruler_vt | 1.0 @8K/32K; 0.88 @64K; 0.736 @131K* | 1.00 @64K/131K |
+
+Decode is +24% over the bench config (CUDA graphs on vs eager; block
+2304). The prefill/TTFT cost (-16% / +0.2s) is real (outside error bars)
+and accepted: decode dominates agent-serving wall-clock.
+
+*The ruler_vt depth "degradation" is a HARNESS ARTIFACT, diagnosed
+2026-08-30 with logged samples: max_gen_toks=256 counts thinking tokens,
+the model reasons longer at depth, and the deepseek_r1 parser correctly
+strips reasoning out of content - so deep-context answers get truncated
+(one sample: content cut mid-sentence before the variable list; another:
+0 content tokens, all 256 spent thinking). Same 8 prompts @131K: budget
+256 scores 0.75, budget 1024 scores 1.00. The bench config "passed" at
+256 only because it serves without a reasoning parser, so think-text
+leaks into content and RULER's string match finds the answer inside the
+reasoning. Rule for ALL evals against endpoints with a reasoning parser:
+budget must cover thinking + answer (max_gen_toks >= 1024 for RULER), a
+stricter form of the max_gen_toks trap already in this file.
+
+Still unmeasured on the serve config: >131K prompts, MM inference,
+DFlash2 acceptance under 16-seat concurrency.
