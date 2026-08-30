@@ -196,3 +196,73 @@ FlashInfer autotune wedge on the stock image (superseded by tonyd2wild
 image switch); Glm5NextProcessor requires a local model path (HF id form
 crashes); EXL3 multimodal warmup OOM on 121 GiB UMA (--language-model-only);
 the 32K topk ceiling (mod above).
+
+## The serve recipe (recipes/glm-5.3-flash-serve.yaml, 2026-08-30)
+
+Production config, built ground-up as a replication of the official vLLM
+recipe (recipes.vllm.ai GLM-5.3-Flash, GB200 NVL4 profile) with exactly
+three contract exceptions: image (tonyd2wild sm121-v11-dflash2 - official
+x86 image cannot run on aarch64), checkpoint (LibertAIDAI NVFP4 - official
+offers RedHatAI NVFP4/FP8/BF16), TP x nodes (4 x 1-GPU Sparks vs official
+8 x 2; --nnodes/--node-rank/--master-addr and NCCL/GLOO IFACE env are
+generated per node by launch-cluster.sh). Doc priority for deviations:
+vLLM official -> LibertAI -> Mia -> tony.
+
+Deviations discovered mandatory by boot testing (~10 cycles):
+
+- **gpu-memory-utilization 0.85**: this build's 0.92 default asks 111.95
+  GiB; GB10 UMA has 110.19 of 121.69 GiB free at boot (host owns the
+  rest) and the engine refuses to start. 0.85 is the tony-validated value
+  every measured result used.
+- **HF_HUB_OFFLINE=1** (universal, both tony's and Mia's images):
+  Glm5NextProcessor open()s processor_config.json relative to the model
+  argument; offline mode makes vLLM resolve the HF id to the local
+  snapshot path first. Without it the API server crashes at boot.
+- **Cache refs churn**: LibertAI pushed 3 README-only revisions in 24h
+  (357b45cc full weights -> 436914c7 -> caca4e6a sparse); any online tool
+  touching the repo moves the cache's refs/main pointer, and a boot then
+  fails "cannot find weights" at the new snapshot. Fix: repin refs/main
+  to 357b45cc; container (root) writes can leave refs root-owned - chown
+  1000:1000. An explicit --revision pin was proposed and declined
+  (owner decision, 2026-08-30); refs hygiene is the standing mitigation.
+
+Approved tuning deviations from vLLM defaults (owner-approved, all
+smoke-validated together):
+
+- max-num-seqs 16 (default 128) - fleet seat cap consistent with ds4f-1m.
+- max-num-batched-tokens 8192 (default 2048) - 4x long-prompt prefill.
+- block-size 2304 (default 16) - 18x128, aligned to the sparse indexer's
+  128-token tiles; both validated GB10 deployments chose it
+  independently; best 72K needle of the campaign (36.6s vs 42s prior).
+- max-model-len 1048576 explicit - same shortfall-becomes-boot-failure
+  policy as ds4f-1m. Validated to 131,072-token prompts; beyond is
+  configured but untested.
+- DFlash2 k=7 explicit probabilistic+standard (52.5 vs MTP-5's ~38
+  tok/s). Drafter incoai/GLM-5.3-Flash-DFlash2 is CC BY-NC-ND
+  (non-commercial); official MTP-5 config is the commercial fallback.
+  Drafter must be in every node's HF cache.
+- --enable-prefix-caching stated explicitly (vLLM default is on).
+- KV pin: none (auto pool 6.69M tokens @0.85). The 24 GiB/rank pin was
+  A/B'd and has no measured benefit (see KV-pool note above).
+
+Thinking/parser findings (probed on the live endpoint):
+
+- Thinking is ALWAYS ON - the template has no enable_thinking kwarg.
+  Clients dial it with chat_template_kwargs {"reasoning_effort":
+  "low"|"high"|"max"} (default max; measured: low ~50 think tokens/1.5s,
+  max ~310/7.8s). clear_thinking=true (zai chat recommendation) strips
+  prior turns' think blocks from the prompt; set false only for
+  benchmark repro/debugging of multi-turn reasoning.
+- Reasoning arrives in message.reasoning (NOT reasoning_content) in this
+  vLLM build. An early probe read the wrong field and blamed the glm45
+  parser for discarding think blocks - glm45 (the official recipe's
+  choice) is not disproven. deepseek_r1 is kept per the LibertAI model
+  card and is probe-verified working.
+
+Smoke status (final config, 2026-08-30): boots ~15 min; 72,218-token
+needle exact in 36.6s; reasoning present; effort dial works; glm47 tool
+calls structured correctly; KV pool 6,692,504 tokens (~6.4 full 1M
+sessions, ~25 @262K, 16-seat cap). Not yet formally measured on THIS
+config: benchy/GSM8K/RULER (bench-recipe numbers above are the
+reference), >131K prompts, MM inference, DFlash2 acceptance under
+concurrency.

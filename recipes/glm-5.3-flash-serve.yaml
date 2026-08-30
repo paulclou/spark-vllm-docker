@@ -1,61 +1,30 @@
 # GLM-5.3-Flash serve - replication of the official vLLM recipe
 # (recipes.vllm.ai GLM-5.3-Flash, multi-node TP profile).
 #
-# Contract (Paul, 2026-08-30): replicate the official recipe EXCEPT
-#   1. image      - official x86 vllm/vllm-openai:glm53-flash cannot run on
-#                   aarch64 GB10; tonyd2wild sm121 build via
-#                   PREBUILT_RUNNER_IMAGE=ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2 \
-#                     ./build-and-copy.sh -t vllm-node-glm5.3-flash -c
-#   2. checkpoint - LibertAIDAI NVFP4 (official offers RedHatAI NVFP4/FP8/BF16)
-#   3. TP x nodes - 4 x 1-GPU Sparks (official example: 8 x 2); node wiring
-#                   (--nnodes/--node-rank/--master-addr, IFACE env) is
-#                   generated per node by launch-cluster.sh
-# Everything else replicates the official command; vLLM defaults untouched.
+# Contract: replicate the official recipe EXCEPT image (official x86 image
+# cannot run on aarch64 GB10; tonyd2wild sm121-v11-dflash2 build), checkpoint
+# (LibertAIDAI NVFP4), and TP x nodes (4 x 1-GPU Sparks; node wiring generated
+# by launch-cluster.sh). Deviation rationale, tuning history, thinking/parser
+# findings, and measurements: docs/GLM53_FLASH.md ("The serve recipe").
 #
-# Tuning deviations (Paul, 2026-08-30):
-#   --max-num-seqs 16 (vLLM default 128) - fleet-serving cap consistent
-#     with ds4f-1m; GB10 aggregate decode saturates well below 128 streams.
-#   --max-num-batched-tokens 8192 (vLLM default 2048) - 4x faster
-#     long-prompt prefill (tony's validated value).
+# Boot/correctness-mandatory on GB10 (not tuning):
+#   --gpu-memory-utilization 0.85 - vLLM default exceeds UMA free memory;
+#     engine refuses to start.
+#   --moe-backend marlin - sm_121 auto-select emits silent garbage.
+#   --trust-remote-code - checkpoint refuses to load without it.
+#   HF_HUB_OFFLINE=1 - Glm5NextProcessor needs local-path resolution.
+#   mods/fix-glm53-topk-sm120 - >32K requests crash without it (issue #27).
 #
-# Serving choices (Paul, 2026-08-30): --served-model-name glm-5.3-flash-nvfp4
-# (official omits; clients get a stable alias). Thinking is ALWAYS ON in
-# this model (no enable_thinking in the template); clients dial it with
-# chat_template_kwargs {"reasoning_effort": "low"|"high"|"max"} (default
-# max; probe: low = ~50 think tokens / 1.5s vs max ~310 / 7.8s).
-# clear_thinking=true strips prior turns' think blocks from the prompt
-# (zai's chat recommendation; content is untouched).
-# --reasoning-parser deepseek_r1, NOT glm45: probed 2026-08-30 - glm45 on
-# vLLM silently discards the think block (reasoning_content empty, ~300
-# tokens lost per reply); deepseek_r1 per LibertAI's card. Doc priority
-# for deviations: vLLM official -> LibertAI -> Mia -> tony (Paul).
-#
-# --max-model-len 1048576: explicit statement of the checkpoint's
-# max_position_embeddings (the value vLLM resolves implicitly); stating it
-# makes a shortfall a boot failure instead of a silently shorter window
-# (same policy as ds4f-1m). Serving validated to 131,072-token prompts;
-# beyond that is configured but untested.
-#
-# --block-size 2304 (vLLM default 16): tuning deviation (Paul, 2026-08-30).
-# 18x128 - aligned to the sparse indexer's 128-token tile structure; both
-# validated GB10 deployments (tony, Mia) independently chose 2304, and the
-# kpool manager requires block-aligned lookups anyway. Waste cost ~0.3%.
-#
-# GB10-mandatory: --gpu-memory-utilization 0.85 - vLLM's default (0.92 in
-# this build, 111.95 GiB) exceeds GB10 UMA free memory at boot (110.19 of
-# 121.69 GiB; host owns the rest) and the engine refuses to start. 0.85 is
-# the tony-validated value all measured results used.
-#
-# Speculative decode: DFlash2 k=7 (Paul, 2026-08-30) - measured 52.5 tok/s
-# vs MTP-5's ~38 on this stack. NOTE: drafter incoai/GLM-5.3-Flash-DFlash2
-# is CC BY-NC-ND (non-commercial); revert to the official MTP-5 config for
-# commercial serving. Drafter must be in every node's HF cache.
-#
-# Two survival additions, both boot/correctness-mandatory on this stack
-# (not tuning): --trust-remote-code (LibertAIDAI checkpoint refuses to load
-# without it) and --moe-backend marlin (sm_121 auto-select emits silent
-# garbage). mods/fix-glm53-topk-sm120 rides the launcher, not the command
-# (>32K requests crash the engine without it; issue #27).
+# Approved tuning deviations from vLLM defaults (Paul, 2026-08-30):
+#   max-num-seqs 16, max-num-batched-tokens 8192, block-size 2304,
+#   max-model-len 1048576 explicit, DFlash2 k=7 (drafter is CC BY-NC-ND;
+#   MTP-5 is the commercial fallback), served-model-name alias,
+#   deepseek_r1 reasoning parser (LibertAI card; glm45 - official's choice -
+#   not disproven, our early probe read the wrong response field),
+#   clear_thinking=true, --enable-prefix-caching stated explicitly (vLLM
+#   default is already on; stating it makes the assumption visible).
+# Reasoning arrives in message.reasoning; clients dial effort with
+# chat_template_kwargs {"reasoning_effort": "low"|"high"|"max"}.
 
 recipe_version: "1"
 name: GLM-5.3-Flash-Serve
@@ -105,6 +74,7 @@ command: |
       --block-size {block_size} \
       --kv-cache-dtype fp8 \
       --moe-backend marlin \
+      --enable-prefix-caching \
       --tool-call-parser glm47 \
       --enable-auto-tool-choice \
       --reasoning-parser deepseek_r1 \
