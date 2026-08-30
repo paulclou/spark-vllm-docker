@@ -41,6 +41,7 @@ cluster_only: true
 mods:
   - mods/drop-caches
   - mods/fix-glm53-topk-sm120
+  - mods/mia-backports-20260830
 
 defaults:
   port: 8000
