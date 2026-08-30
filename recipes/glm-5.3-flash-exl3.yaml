@@ -35,7 +35,11 @@ env:
   NCCL_IB_GID_INDEX: "3"
 
 command: |
-  vllm serve Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw \
+  # Serve by local snapshot path, not HF id: Glm5NextProcessor.from_pretrained
+  # does a raw open(<model>/processor_config.json), which only resolves for a
+  # local directory. The file ships in the checkpoint; the id form crashes.
+  MODEL_DIR=$(ls -d /root/.cache/huggingface/hub/models--Mia-AiLab--GLM-5.3-Flash-EXL3-TR3-4bpw/snapshots/*/ | head -1)
+  vllm serve "$MODEL_DIR" \
       --served-model-name glm-5.3-flash \
       --host {host} \
       --port {port} \
