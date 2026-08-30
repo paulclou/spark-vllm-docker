@@ -103,3 +103,68 @@ non-causal draft attention handled by Mia's overlay. The SGLang path
 (PR sgl-project/sglang#36708, fa4 draft backend) remains blocked on sm_121.
 A DFlash2 drafter for Qwen3.8-Flash-Next exists on the same lineage; porting
 this overlay approach to the qwen lane is a candidate speed experiment.
+
+## Measured results - 4x Spark TP=4 (2026-08-30)
+
+First measured TP=4 numbers for both recipes on our cluster (4x GB10,
+CRS812 2x200G breakout fabric, dual-rail RoCEv2). Protocol: llama-benchy
+0.4.0 (pp2048/tg128, 3 runs, single stream), lm-eval GSM8K 200q 5-shot,
+lm-eval RULER slice (niah_single_2, niah_multikey_1, ruler_vt; 25
+samples/length; max_gen_toks=256 - the lm-eval default truncates chat
+models' ruler_vt answers and invalidates the score).
+
+| Metric | NVFP4 (tonyd2wild image, DFlash2 k=7) | EXL3 (Mia kit, DFlash2 k=7) |
+| --- | --- | --- |
+| Prefill pp2048 | 1792 +/- 89 tok/s | 940 +/- 76 tok/s |
+| Decode tg128 | 52.5 +/- 0.5 (peak 66) | 49.0 +/- 1.3 (peak 59) |
+| TTFT @2K | 1.15 s | 2.20 s |
+| GSM8K 200q (flex/strict) | 89.0 / 87.5 % | 88.0 / 86.5 % |
+| RULER 8K (s2/mk1/vt) | 1.0 / 1.0 / (vt artifact) | 1.0 / 1.0 / 1.0 |
+| RULER 16K | - | 1.0 / 1.0 / 1.0 |
+| RULER 32K | 1.0 / 1.0 / (vt artifact) | - |
+| RULER 64K (with topk mod) | pending rerun | 1.0 / 1.0 / 1.0 |
+| KV pool (boot log) | 3,895,606 tok | 1,215,058 tok @131K window |
+| Max-context concurrency | 3.7 @1M / 14.8 @262K | 9.3 @131K |
+
+Takeaways:
+  - NVFP4 (tony's stack) beats its author's own 36 tok/s report (dual-rail
+    fabric; his launcher wires one rail) and leads EXL3 on every speed
+    metric at TP=4. Mia's 62.9 tok/s TP2 figure did not carry to TP4.
+  - Quality is statistically identical across quants (GSM8K within
+    stderr; RULER retrieval perfect on both).
+  - Speed numbers are speculative-decode-dependent (DFlash2 k=7 both
+    sides; acceptance varies with content) and say nothing about work
+    quality beyond the GSM8K/RULER probes above.
+
+### The GB10 32K ceiling and mods/fix-glm53-topk-sm120
+
+Until 2026-08-30 every GLM-5.3-Flash stack on GB10 had an undocumented
+hard ceiling: any request past ~32K tokens (sparse-indexer activation)
+killed the engine in launch_persistent_topk (topk.cu:138) - the
+persistent launch needs total_ctas <= num_sms*occupancy (48 on GB10 vs
+77-90 required) and the FilteredTopK fallback needs 128KB smem/block
+(GB10: 101KB, B200: 227KB). The NVFP4 stack boots at 1M and dies on the
+first long request; the EXL3 stack dies at boot profiling for any
+max_model_len that engages the sparse path. Nobody had published a real
+>32K prompt run on GB10 - large advertised windows were boot-tested, not
+serve-tested. Not a hardware limit of Spark itself: DeepSeek-V4-Flash
+serves 800K on this same cluster via different kernels.
+
+Root cause: the persistent_topk selector in sparse_attn_indexer.py /
+sparse_attn_indexer_kpool.py lacks the sm120-family exclusion its
+cooperative_topk sibling already has. mods/fix-glm53-topk-sm120 adds it,
+routing GB10 to the generic top_k_per_row_decode kernel already present
+in the else branch. Validated: EXL3 TP4 boots at 131072, serves 75/75
+long requests, RULER 1.000/1.000/1.000 at 65,536 tokens - to our
+knowledge the first >32K GLM-5.3-Flash serving on this hardware. Both
+recipes now carry the mod. Fallback-kernel long-context throughput is
+lower than the persistent kernel would be on datacenter parts; measured
+pace at 64K was ~52-60 s/item including prefill. Tracking: issue #27;
+upstream (vLLM glm5_next) and image maintainers should receive this.
+
+Session bug ledger (all fixed in recipes on this branch): missing
+VLLM_MLA_NOPE_PAD_ROPE env gate (boot death in fp8_ds_mla cache); TP4
+FlashInfer autotune wedge on the stock image (superseded by tonyd2wild
+image switch); Glm5NextProcessor requires a local model path (HF id form
+crashes); EXL3 multimodal warmup OOM on 121 GiB UMA (--language-model-only);
+the 32K topk ceiling (mod above).
