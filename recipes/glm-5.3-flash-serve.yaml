@@ -7,10 +7,8 @@
 #     ./build-and-copy.sh -t vllm-node-glm5.3-flash -c
 #
 # Decision log (what changed vs the benchmark recipe, and why):
-#   kv-cache-memory 24 GiB/rank pin: KEPT - A/B'd unpinned 2026-08-30:
-#     unpinned gives 7.2M-token pool but degrades 131K retrieval (9/16 vs
-#     25/25 pinned) and decode variance (+/-5.0 vs +/-0.5 tok/s).
-#     Mechanism unknown; the pin is empirically load-bearing.
+#   kv-cache-memory: AUTO (no pin, per Paul 2026-08-30) - vLLM's profiler
+#     allocates ~44 GiB/rank -> ~7.2M-token pool (~27 sessions @262K).
 #   max_num_seqs 12 (was 6): fleet pattern from the ds4f campaign; pinned
 #     pool = 3.9M tokens = ~14 sessions @262K. DFlash2 acceptance under
 #     concurrent load is UNMEASURED - watch aggregate tok/s at c>4.
@@ -88,7 +86,6 @@ command: |
       --block-size 2304 \
       --max-num-batched-tokens 8192 \
       --kv-cache-dtype fp8_e4m3 \
-      --kv-cache-memory 25769803776 \
       --enforce-eager \
       --enable-prefix-caching \
       --moe-backend marlin \
