@@ -44,7 +44,6 @@ defaults:
 
 env:
   VLLM_ENGINE_READY_TIMEOUT_S: "3600"
-  HF_HUB_OFFLINE: "1"
 
 command: |
   vllm serve /root/.cache/huggingface/hub/models--LibertAIDAI--GLM-5.3-Flash-NVFP4/snapshots/357b45cc73a07a541cede88861f7736c9487ebf7 \
