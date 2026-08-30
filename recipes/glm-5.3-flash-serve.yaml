@@ -18,6 +18,11 @@
 #   --max-num-batched-tokens 8192 (vLLM default 2048) - 4x faster
 #     long-prompt prefill (tony's validated value).
 #
+# Serving choices (Paul, 2026-08-30): --served-model-name glm-5.3-flash-nvfp4
+# (official omits; clients get a stable alias) and thinking ON by default
+# via --default-chat-template-kwargs (this build's template defaults off;
+# clients opt out per-request with chat_template_kwargs).
+#
 # GB10-mandatory: --gpu-memory-utilization 0.85 - vLLM's default (0.92 in
 # this build, 111.95 GiB) exceeds GB10 UMA free memory at boot (110.19 of
 # 121.69 GiB; host owns the rest) and the engine refuses to start. 0.85 is
@@ -59,6 +64,7 @@ env:
 
 command: |
   vllm serve LibertAIDAI/GLM-5.3-Flash-NVFP4 \
+      --served-model-name glm-5.3-flash-nvfp4 \
       --trust-remote-code \
       --port {port} \
       --host {host} \
@@ -71,4 +77,5 @@ command: |
       --tool-call-parser glm47 \
       --enable-auto-tool-choice \
       --reasoning-parser glm45 \
-      --speculative-config '{{"method":"mtp","num_speculative_tokens":5}}'
+      --speculative-config '{{"method":"mtp","num_speculative_tokens":5}}' \
+      --default-chat-template-kwargs '{{"enable_thinking": true}}'
