@@ -124,7 +124,16 @@ models' ruler_vt answers and invalidates the score).
 | RULER 32K | 1.0 / 1.0 / - | - |
 | RULER 64K (with topk mod) | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
 | RULER 120-131K (with topk mod) | 1.0 / 1.0 / 1.0 @131072 | 1.0 / 0.92 / 0.63 @122880 |
-| KV pool (boot log) | 3,895,606 tok | 1,215,058 tok @131K window |
+| KV pool (boot log) | 3,895,606 tok | ~1.2M tok @131K window |
+
+KV-pool note: the gap is allocation policy plus real runtime footprint,
+not page cache - verified by booting EXL3 with a 5s cache flusher on all
+nodes (pool unchanged: 1,197,617 vs 1,215,058 unflushed). NVFP4 pins
+24 GiB/rank explicitly and runs eager (no graph memory); EXL3 KV is the
+residue after vLLM profiles Mia's stack (EXL3 workspaces + CUDA graphs)
+under her 0.87 util fraction. An explicit kv-cache-memory pin would grow
+the EXL3 pool but is deliberately not applied (kept faithful to Mia's
+config).
 | Max-context concurrency | 3.7 @1M / 14.8 @262K | 9.3 @131K |
 
 Takeaways:
