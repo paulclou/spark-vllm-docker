@@ -123,6 +123,7 @@ models' ruler_vt answers and invalidates the score).
 | RULER 16K | - | 1.0 / 1.0 / 1.0 |
 | RULER 32K | 1.0 / 1.0 / (vt artifact) | - |
 | RULER 64K (with topk mod) | pending rerun | 1.0 / 1.0 / 1.0 |
+| RULER 120K (with topk mod) | pending rerun | 1.0 / 0.92 / 0.63 |
 | KV pool (boot log) | 3,895,606 tok | 1,215,058 tok @131K window |
 | Max-context concurrency | 3.7 @1M / 14.8 @262K | 9.3 @131K |
 
@@ -156,7 +157,10 @@ cooperative_topk sibling already has. mods/fix-glm53-topk-sm120 adds it,
 routing GB10 to the generic top_k_per_row_decode kernel already present
 in the else branch. Validated: EXL3 TP4 boots at 131072, serves 75/75
 long requests, RULER 1.000/1.000/1.000 at 65,536 tokens - to our
-knowledge the first >32K GLM-5.3-Flash serving on this hardware. Both
+knowledge the first >32K GLM-5.3-Flash serving on this hardware. At
+122,880 tokens: 75/75 served, retrieval 1.0/0.92, ruler_vt 0.632 -
+retrieval-grade quality holds through 120K; complex state tracking
+degrades past 64K (model characteristic, not a serving failure). Both
 recipes now carry the mod. Fallback-kernel long-context throughput is
 lower than the persistent kernel would be on datacenter parts; measured
 pace at 64K was ~52-60 s/item including prefill. Tracking: issue #27;
