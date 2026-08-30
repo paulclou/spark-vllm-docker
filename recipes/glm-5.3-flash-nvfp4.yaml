@@ -1,9 +1,16 @@
-# GLM-5.3-Flash, LibertAIDAI NVFP4 (182 GiB), dedicated upstream image, TP=4.
+# GLM-5.3-Flash, LibertAIDAI NVFP4 (182 GiB), tonyd2wild patched image, TP=4.
 # Flag set is kingjones30's GB10-validated recipe (24.7-30.3 tok/s, MTP-5).
 #
 # Image prep:
-#   PREBUILT_RUNNER_IMAGE=vllm/vllm-openai:glm53-flash-arm64-cu130 \
+#   PREBUILT_RUNNER_IMAGE=ghcr.io/tonyd2wild/vllm-glm53-flash:sm121-v11-dflash2 \
 #     ./build-and-copy.sh -t vllm-node-glm5.3-flash -c
+#
+# The base carries tonyd2wild's v1-v9 patch stack (NoPE-MLA backend, FA2 NaN,
+# PDL race, uninitialized indexer top-k memory, fp8-KV tile) - the only
+# TP4-validated NVFP4 image on GB10. The stock day-0 image needs runtime mods
+# and still wedges at TP=4 (uninitialized indexer top-k: all ranks spin at 96%
+# GPU in the first sparse-MLA dummy run). The image's DFlash2 overlay is
+# inert under this MTP config; the CC BY-NC-ND DFlash2 drafter is NOT loaded.
 #
 # --moe-backend marlin is mandatory on sm_121: the auto-selected
 # FLASHINFER_CUTLASS NvFp4 MoE backend produces silent garbage output.
@@ -11,15 +18,12 @@
 
 recipe_version: "1"
 name: GLM-5.3-Flash-NVFP4
-description: vLLM serving LibertAIDAI/GLM-5.3-Flash-NVFP4 on a 4x Spark cluster via the dedicated glm53-flash image
+description: vLLM serving LibertAIDAI/GLM-5.3-Flash-NVFP4 on a 4x Spark cluster via tonyd2wild's patched sm121 image
 
 model: LibertAIDAI/GLM-5.3-Flash-NVFP4
 container: vllm-node-glm5.3-flash
 
 cluster_only: true
-
-mods:
-  - mods/fix-glm53-nope-rope-pad
 
 defaults:
   port: 8000
@@ -28,14 +32,6 @@ defaults:
   gpu_memory_utilization: 0.85
   max_model_len: 262144
   max_num_seqs: 1
-
-# Required: fix-glm53-nope-rope-pad is env-gated; without this the patch is
-# dormant and boot dies with "pe_dim must be 64 for fp8_ds_mla".
-# FlashInfer autotune is disabled: at TP=4 its cross-rank tactic-timing sync
-# deadlocks in a sparse-MLA op (all ranks spin at 96% GPU indefinitely).
-# MoE runs on marlin, so the main autotune beneficiary is unaffected.
-env:
-  VLLM_MLA_NOPE_PAD_ROPE: "1"
 
 command: |
   vllm serve LibertAIDAI/GLM-5.3-Flash-NVFP4 \
@@ -51,6 +47,5 @@ command: |
       --language-model-only \
       --moe-backend marlin \
       --speculative-config '{{"method":"mtp","num_speculative_tokens":5}}' \
-      --kernel-config '{{"enable_flashinfer_autotune": false}}' \
       --tool-call-parser glm47 --enable-auto-tool-choice \
       --reasoning-parser glm45
