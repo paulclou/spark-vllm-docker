@@ -133,7 +133,12 @@ nodes (pool unchanged: 1,197,617 vs 1,215,058 unflushed). NVFP4 pins
 residue after vLLM profiles Mia's stack (EXL3 workspaces + CUDA graphs)
 under her 0.87 util fraction. An explicit kv-cache-memory pin would grow
 the EXL3 pool but is deliberately not applied (kept faithful to Mia's
-config).
+config). Conversely the NVFP4 pin costs capacity: measured unpinned,
+the profiler hands KV ~44 GiB/rank -> 7,193,816 tokens (1.85x the
+pinned 3.9M; ~27 sessions @262K). The pin stays as the validated
+default - removing it thins the UMA host-OOM margin tony's envelope
+(docker --memory cap + flusher) exists to protect. Flip deliberately
+if capacity is the priority.
 | Max-context concurrency | 3.7 @1M / 14.8 @262K | 9.3 @131K |
 
 Takeaways:
