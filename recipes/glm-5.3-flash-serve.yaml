@@ -68,6 +68,10 @@ cluster_only: true
 
 mods:
   - mods/fix-glm53-topk-sm120
+  # kpool tail slot-map clamp (silent corruption on generations >~2K tokens,
+  # mechanism credited to vcruz305) + XGrammar termination backports.
+  # Vendored from Mia's overlay; exonerated of side effects by the KV A/B.
+  - mods/mia-backports-20260830
 
 defaults:
   port: 8000
