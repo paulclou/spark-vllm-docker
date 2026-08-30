@@ -18,6 +18,11 @@
 #   --max-num-batched-tokens 8192 (vLLM default 2048) - 4x faster
 #     long-prompt prefill (tony's validated value).
 #
+# GB10-mandatory: --gpu-memory-utilization 0.85 - vLLM's default (0.92 in
+# this build, 111.95 GiB) exceeds GB10 UMA free memory at boot (110.19 of
+# 121.69 GiB; host owns the rest) and the engine refuses to start. 0.85 is
+# the tony-validated value all measured results used.
+#
 # Two survival additions, both boot/correctness-mandatory on this stack
 # (not tuning): --trust-remote-code (LibertAIDAI checkpoint refuses to load
 # without it) and --moe-backend marlin (sm_121 auto-select emits silent
@@ -40,6 +45,7 @@ defaults:
   port: 8000
   host: 0.0.0.0
   tensor_parallel: 4
+  gpu_memory_utilization: 0.85
   max_num_seqs: 16
   max_num_batched_tokens: 8192
 
@@ -57,6 +63,7 @@ command: |
       --port {port} \
       --host {host} \
       --tensor-parallel-size {tensor_parallel} \
+      --gpu-memory-utilization {gpu_memory_utilization} \
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
       --kv-cache-dtype fp8 \
