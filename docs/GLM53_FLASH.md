@@ -119,11 +119,11 @@ models' ruler_vt answers and invalidates the score).
 | Decode tg128 | 52.5 +/- 0.5 (peak 66) | 49.0 +/- 1.3 (peak 59) |
 | TTFT @2K | 1.15 s | 2.20 s |
 | GSM8K 200q (flex/strict) | 89.0 / 87.5 % | 88.0 / 86.5 % |
-| RULER 8K (s2/mk1/vt) | 1.0 / 1.0 / (vt artifact) | 1.0 / 1.0 / 1.0 |
+| RULER 8K (s2/mk1/vt) | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
 | RULER 16K | - | 1.0 / 1.0 / 1.0 |
-| RULER 32K | 1.0 / 1.0 / (vt artifact) | - |
-| RULER 64K (with topk mod) | pending rerun | 1.0 / 1.0 / 1.0 |
-| RULER 120K (with topk mod) | pending rerun | 1.0 / 0.92 / 0.63 |
+| RULER 32K | 1.0 / 1.0 / - | - |
+| RULER 64K (with topk mod) | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| RULER 120-131K (with topk mod) | 1.0 / 1.0 / 1.0 @131072 | 1.0 / 0.92 / 0.63 @122880 |
 | KV pool (boot log) | 3,895,606 tok | 1,215,058 tok @131K window |
 | Max-context concurrency | 3.7 @1M / 14.8 @262K | 9.3 @131K |
 
@@ -136,6 +136,13 @@ Takeaways:
   - Speed numbers are speculative-decode-dependent (DFlash2 k=7 both
     sides; acceptance varies with content) and say nothing about work
     quality beyond the GSM8K/RULER probes above.
+  - Verdict: NVFP4 (tonyd2wild stack) wins speed, KV capacity, and
+    extreme-length quality (perfect through 131K; EXL3's 4bpw degrades
+    at 120K: vt 0.63, retrieval 0.92). EXL3's case is quality parity
+    <=64K at 10% fewer weight bytes.
+  - The early low ruler_vt scores (0.288/0.352) were a harness artifact:
+    lm-eval's default generation budget truncates chat-model VT answers.
+    With max_gen_toks=256 both stacks score 1.0 (through 131K on NVFP4).
 
 ### The GB10 32K ceiling and mods/fix-glm53-topk-sm120
 
