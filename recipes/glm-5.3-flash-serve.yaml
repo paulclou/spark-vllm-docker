@@ -36,6 +36,11 @@
 # (same policy as ds4f-1m). Serving validated to 131,072-token prompts;
 # beyond that is configured but untested.
 #
+# --block-size 2304 (vLLM default 16): tuning deviation (Paul, 2026-08-30).
+# 18x128 - aligned to the sparse indexer's 128-token tile structure; both
+# validated GB10 deployments (tony, Mia) independently chose 2304, and the
+# kpool manager requires block-aligned lookups anyway. Waste cost ~0.3%.
+#
 # GB10-mandatory: --gpu-memory-utilization 0.85 - vLLM's default (0.92 in
 # this build, 111.95 GiB) exceeds GB10 UMA free memory at boot (110.19 of
 # 121.69 GiB; host owns the rest) and the engine refuses to start. 0.85 is
@@ -71,6 +76,7 @@ defaults:
   gpu_memory_utilization: 0.85
   max_model_len: 1048576
   max_num_seqs: 16
+  block_size: 2304
   max_num_batched_tokens: 8192
 
 env:
@@ -92,6 +98,7 @@ command: |
       --max-model-len {max_model_len} \
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
+      --block-size {block_size} \
       --kv-cache-dtype fp8 \
       --moe-backend marlin \
       --tool-call-parser glm47 \
