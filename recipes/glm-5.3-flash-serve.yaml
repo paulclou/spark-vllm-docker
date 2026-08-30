@@ -12,6 +12,10 @@
 #                   generated per node by launch-cluster.sh
 # Everything else replicates the official command; vLLM defaults untouched.
 #
+# Tuning deviation (Paul, 2026-08-30): --max-num-seqs 16 (vLLM default 128)
+# - fleet-serving cap consistent with ds4f-1m; GB10 aggregate decode
+# saturates well below 128 streams.
+#
 # Two survival additions, both boot/correctness-mandatory on this stack
 # (not tuning): --trust-remote-code (LibertAIDAI checkpoint refuses to load
 # without it) and --moe-backend marlin (sm_121 auto-select emits silent
@@ -34,6 +38,7 @@ defaults:
   port: 8000
   host: 0.0.0.0
   tensor_parallel: 4
+  max_num_seqs: 16
 
 env:
   VLLM_ENGINE_READY_TIMEOUT_S: "3600"
@@ -44,6 +49,7 @@ command: |
       --port {port} \
       --host {host} \
       --tensor-parallel-size {tensor_parallel} \
+      --max-num-seqs {max_num_seqs} \
       --kv-cache-dtype fp8 \
       --moe-backend marlin \
       --tool-call-parser glm47 \
