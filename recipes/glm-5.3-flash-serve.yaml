@@ -45,6 +45,11 @@ defaults:
 
 env:
   VLLM_ENGINE_READY_TIMEOUT_S: "3600"
+  # Survival addition: Glm5NextProcessor open()s files relative to the model
+  # argument; offline mode makes vLLM resolve the HF id to the local snapshot
+  # first. tonyd2wild's launcher sets this too (plus TRANSFORMERS_OFFLINE).
+  # Without it the API server crashes on processor_config.json at boot.
+  HF_HUB_OFFLINE: "1"
 
 command: |
   vllm serve LibertAIDAI/GLM-5.3-Flash-NVFP4 \
