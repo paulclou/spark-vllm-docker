@@ -35,6 +35,11 @@
 # 121.69 GiB; host owns the rest) and the engine refuses to start. 0.85 is
 # the tony-validated value all measured results used.
 #
+# Speculative decode: DFlash2 k=7 (Paul, 2026-08-30) - measured 52.5 tok/s
+# vs MTP-5's ~38 on this stack. NOTE: drafter incoai/GLM-5.3-Flash-DFlash2
+# is CC BY-NC-ND (non-commercial); revert to the official MTP-5 config for
+# commercial serving. Drafter must be in every node's HF cache.
+#
 # Two survival additions, both boot/correctness-mandatory on this stack
 # (not tuning): --trust-remote-code (LibertAIDAI checkpoint refuses to load
 # without it) and --moe-backend marlin (sm_121 auto-select emits silent
@@ -84,5 +89,5 @@ command: |
       --tool-call-parser glm47 \
       --enable-auto-tool-choice \
       --reasoning-parser deepseek_r1 \
-      --speculative-config '{{"method":"mtp","num_speculative_tokens":5}}' \
+      --speculative-config '{{"method":"dflash","model":"incoai/GLM-5.3-Flash-DFlash2","num_speculative_tokens":7,"draft_sample_method":"probabilistic","rejection_sample_method":"standard"}}' \
       --default-chat-template-kwargs '{{"clear_thinking": true}}'
