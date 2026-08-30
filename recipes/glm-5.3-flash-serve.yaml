@@ -30,6 +30,12 @@
 # tokens lost per reply); deepseek_r1 per LibertAI's card. Doc priority
 # for deviations: vLLM official -> LibertAI -> Mia -> tony (Paul).
 #
+# --max-model-len 1048576: explicit statement of the checkpoint's
+# max_position_embeddings (the value vLLM resolves implicitly); stating it
+# makes a shortfall a boot failure instead of a silently shorter window
+# (same policy as ds4f-1m). Serving validated to 131,072-token prompts;
+# beyond that is configured but untested.
+#
 # GB10-mandatory: --gpu-memory-utilization 0.85 - vLLM's default (0.92 in
 # this build, 111.95 GiB) exceeds GB10 UMA free memory at boot (110.19 of
 # 121.69 GiB; host owns the rest) and the engine refuses to start. 0.85 is
@@ -63,6 +69,7 @@ defaults:
   host: 0.0.0.0
   tensor_parallel: 4
   gpu_memory_utilization: 0.85
+  max_model_len: 1048576
   max_num_seqs: 16
   max_num_batched_tokens: 8192
 
@@ -82,6 +89,7 @@ command: |
       --host {host} \
       --tensor-parallel-size {tensor_parallel} \
       --gpu-memory-utilization {gpu_memory_utilization} \
+      --max-model-len {max_model_len} \
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
       --kv-cache-dtype fp8 \
