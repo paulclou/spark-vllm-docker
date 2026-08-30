@@ -36,12 +36,14 @@ serving flags are theirs verbatim.
    hang (CPU >150% = still working). Caches persist to `~/.cache/vllm`;
    later boots are fast.
 
-## The mod
+## The mod (removed)
 
-`mods/fix-glm53-nope-rope-pad` adapts GLM's NoPE-MLA to the fp8_ds_mla KV
-layout: builds the attention layer with rope=64, zero-pads q/k_pe, and
-compacts the kpool indexer top-k table 2176 -> 2048. Required for
-`--kv-cache-dtype fp8_ds_mla`.
+`mods/fix-glm53-nope-rope-pad` adapted GLM's NoPE-MLA to the fp8_ds_mla KV
+layout (rope=64 build, q/k_pe zero-pad, kpool top-k table 2176 -> 2048).
+It served the original kingjones fp8_ds_mla port; no current recipe uses
+that KV layout outside Mia's EXL3 overlay image, which carries the NoPE
+handling internally - so the mod was dropped from the branch (recoverable
+from git history if an fp8_ds_mla config returns).
 
 ## Known limits / tuning levers
 
@@ -55,12 +57,22 @@ compacts the kpool indexer top-k table 2176 -> 2048. Required for
 
 Replicates MiaAI-Lab/GLM-5.3-Flash-NVFP4-Dual-DGX-Spark (MIT, @aed98a13ca75):
 multimodal on, max_num_seqs 8, fp8_e4m3 KV, MTP-4, Ray executor (launch with
---ray), 23-30 tok/s x1 / 72 aggregate x8 measured. The image
-(Dockerfile.glm53-mm, sources in docker/glm53/) folds Mia's two layers into
-one build: FlashInfer pinned to 0.6.18 SM90-NoPE-MLA (the stock image's
+--ray), 23-30 tok/s x1 / 72 aggregate x8 measured. The build context
+(Dockerfile.glm53-mm + docker/glm53/, vendored from her repo) was removed
+with the never-built variant - recover from MIT upstream @aed98a13ca75 or
+git history. It folded Mia's two layers into one build: FlashInfer pinned to 0.6.18 SM90-NoPE-MLA (the stock image's
 SM120 sparse path assumes pe_dim=64; this checkpoint is NoPE), NCCL 2.30.7,
 cutlass-dsl 4.6.2, her 423-line SM121 source patch, Ray 2.58, and the
-model's chat template baked at /opt/glm53/.
+model's chat template baked at /opt/glm53/. That baked template is
+byte-identical (verified 2026-08-30) to both the LibertAI checkpoint's
+chat_template.jinja and zai-org's official - so the --chat-template flag
+is defensive redundancy against sparse/broken snapshots, not a
+customization; vLLM autoloads the same template from the checkpoint,
+which is what the production recipe relies on (no flag). The
+verification is also a small counter-datapoint on the LibertAI
+corruption risk: the repack's tokenizer-side files are faithful to the
+official repo (the claim concerns quantized weights, so it stays
+parked).
 
 Her hard-won operational notes: NCCL must be pinned to the CX7 interfaces
 with NCCL_IB_GID_INDEX=3 or ncclCommInitRank busy-waits forever;
