@@ -41,6 +41,11 @@ env:
 # --language-model-only: the multimodal front-end warmup (~15.7 GiB on the
 # API node) OOM-killed the boot on 121 GiB unified memory at 0.87 util.
 # Text-only also matches the NVFP4 recipe for benchmark parity.
+# kv-cache-memory pins 24 GiB/rank for KV (aligned with the NVFP4 recipe
+# for capacity comparability). Mia pins nothing and relies on the 0.87
+# util fraction; at TP4 vLLM's conservative profiling of the EXL3 stack
+# then leaves only ~8 GiB/rank (1.2M-token pool). The pin makes the KV
+# pool an explicit choice instead of a profiling residue.
 # max_model_len 131072 requires mods/fix-glm53-topk-sm120: without it any
 # request >32K (sparse-indexer activation) kills the engine on GB10
 # (persistent_topk unlaunchable: 48-CTA budget vs 77-90 needed, FilteredTopK
@@ -60,6 +65,7 @@ command: |
       --max-model-len {max_model_len} \
       --max-num-seqs {max_num_seqs} \
       --kv-cache-dtype fp8_ds_mla \
+      --kv-cache-memory 25769803776 \
       --language-model-only \
       --enable-prefix-caching \
       --no-enable-flashinfer-autotune \
