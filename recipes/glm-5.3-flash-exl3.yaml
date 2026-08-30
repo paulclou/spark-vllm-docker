@@ -25,7 +25,7 @@ defaults:
   host: 0.0.0.0
   tensor_parallel: 4
   gpu_memory_utilization: 0.87
-  max_model_len: 900000
+  max_model_len: 32768
   max_num_seqs: 4
   num_speculative_tokens: 7
 
@@ -34,6 +34,12 @@ env:
   VLLM_ENGINE_READY_TIMEOUT_S: "3600"
   NCCL_IB_GID_INDEX: "3"
 
+# max_model_len capped at 32768: on GB10 (101KB smem/SM) the GLM sparse
+# indexer's persistent_topk kernel cannot launch (needs 128KB for its
+# fallback; fails at boot profiling for any max_model_len that engages the
+# sparse path, and at request time past ~32K tokens on serving stacks that
+# boot). Applies to both the NVFP4 and EXL3 images - hardware ceiling,
+# not a config bug. 900000 was Mia's TP2 value; TP4 geometry hits the wall.
 command: |
   # Serve by local snapshot path, not HF id: Glm5NextProcessor.from_pretrained
   # does a raw open(<model>/processor_config.json), which only resolves for a
