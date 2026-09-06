@@ -31,7 +31,6 @@ set -uo pipefail
 REPO="${REPO:-$HOME/spark-vllm-docker}"
 OUTDIR="${OUTDIR:-/tmp/bench-campaign}"
 BASE="${BASE:-https://localhost:8000}"
-KEYFILE="${KEYFILE:-$HOME/.vllm-api-key}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-1500}"   # 1M recipe compiles for ~3.5 min
 RECIPE_DIR="$REPO/recipes"
 GEN_DIR="$OUTDIR/recipes"
@@ -164,9 +163,9 @@ systemd_guard() {
 }
 systemd_guard
 
-api_key() { sed -n 's/^VLLM_API_KEY=//p' "$KEYFILE" | tr -d "\"' \n"; }
-KEY="$(api_key)"
-[ -n "$KEY" ] || { echo "no API key in $KEYFILE" >&2; exit 1; }
+# The API key is always VLLM_API_KEY from the environment; nothing else is read.
+KEY="${VLLM_API_KEY:-}"
+[ -n "$KEY" ] || { echo "VLLM_API_KEY is not set; export it before running" >&2; exit 1; }
 
 server_up() {
   curl -sk -m 5 -o /dev/null -w '%{http_code}' \

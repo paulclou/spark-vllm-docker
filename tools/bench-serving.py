@@ -2,7 +2,8 @@
 """Benchmark a running vLLM server: decode rate, concurrency scaling, prefill rate.
 
 Runs on the cluster head node against the local server. Reads the API key from
-/home/paul/.vllm-api-key so the key never has to be passed on a command line.
+the VLLM_API_KEY environment variable (and nowhere else) so the key never has to
+be passed on a command line.
 
 Every number it prints is derived from the server's own token accounting
 (usage.completion_tokens, usage.prompt_tokens) rather than a client-side token
@@ -46,15 +47,10 @@ PROMPTS = {
 
 
 def api_key():
-    path = os.environ.get("VLLM_API_KEY_FILE", "/home/paul/.vllm-api-key")
-    if os.environ.get("VLLM_API_KEY"):
-        return os.environ["VLLM_API_KEY"]
-    with open(path) as fh:
-        for line in fh:
-            line = line.strip()
-            if line.startswith("VLLM_API_KEY="):
-                return line.split("=", 1)[1].strip().strip("'\"")
-    raise SystemExit(f"no VLLM_API_KEY in {path}")
+    key = os.environ.get("VLLM_API_KEY", "")
+    if not key:
+        raise SystemExit("VLLM_API_KEY is not set; export it before running")
+    return key
 
 
 class Client:

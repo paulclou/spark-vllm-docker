@@ -18,8 +18,10 @@ system bundle and breaks uv's own PyPI fetches. `tools/bench-serving.py`
 uses `CERT_NONE` and the probe scripts take `--insecure`; neither is
 required against the tailnet URL.
 
-The API key is `docker exec vllm_node printenv VLLM_API_KEY` (the host
-`~/.vllm-api-key` may not match). Never echo it into a shared log.
+The API key is always `VLLM_API_KEY`, exported in the shell that runs the
+tool. Every script and command below reads it from the environment and
+nowhere else - no key file, no `docker exec`, no ssh lookup. Never echo it
+into a shared log.
 
 ## Host setup
 
@@ -31,10 +33,9 @@ huggingface.co, so run evals on a node and pass LOCAL paths.
 ## Speed - llama-benchy
 
 ```bash
-KEY=$(docker exec vllm_node printenv VLLM_API_KEY)
 SNAP=$(ls -d ~/.cache/huggingface/hub/models--<ORG>--<MODEL>/snapshots/*/)
 uvx llama-benchy@0.4.0 \
-  --base-url https://<node>.<tailnet>.ts.net:8000/v1 --api-key "$KEY" \
+  --base-url https://<node>.<tailnet>.ts.net:8000/v1 --api-key "$VLLM_API_KEY" \
   --model <served-name> --tokenizer "$SNAP" \
   --pp 2048 --tg 128 --runs 3 \
   --save-result ~/bench.json --format json
@@ -55,7 +56,7 @@ without it). For RULER add `,ruler` to the extra plus
 `--with wonderwords --with nltk`.
 
 ```bash
-OPENAI_API_KEY="$KEY" \
+OPENAI_API_KEY="$VLLM_API_KEY" \
 uvx --from "lm_eval[api]" --with transformers lm_eval \
   --model local-completions \
   --model_args "model=<served-name>,base_url=https://<node>.<tailnet>.ts.net:8000/v1/completions,num_concurrent=8,max_retries=3,tokenizer=$SNAP,trust_remote_code=True" \
