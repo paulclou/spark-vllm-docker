@@ -467,3 +467,40 @@ never pipe through `head`), and reading spec-decode acceptance off
   shapes/text image and a bar chart sent as base64 data URIs to
   /v1/chat/completions are described exactly (no extra serve flags needed;
   matches the base recipe's MM validation).
+- Tool calling: `tools/bfcl-bench.sh glm-5.3-flash-uncensored-nvfp4
+  single_turn` on the head node (see below).
+
+### Tool calling - BFCL v4 single_turn (2026-09-06, live endpoint)
+
+Run on the head against 127.0.0.1:8000 on the live production config (no
+restarts; DFlash2 k=7, fp8 KV, glm47 parser, reasoning on). Invocation:
+`THREADS=32 tools/bfcl-bench.sh glm-5.3-flash-uncensored-nvfp4 single_turn`
+with `bfcl-eval==2026.3.23`. 3,401 cases, 1 request timeout
+(live_irrelevance_342-81-3, scored as wrong). Results stay on the head
+under `/tmp/bfcl-harness/result-glm-5.3-flash-uncensored-nvfp4/score/`.
+
+| BFCL v4 category | Accuracy | n |
+| --- | --- | --- |
+| Non-live overall (AST) | 88.00% | 1,390 |
+| - simple: Python / Java / JavaScript | 96.0 / 61.0 / 74.0% | 400 / 100 / 50 |
+| - multiple / parallel / parallel-multiple | 95.5 / 91.0 / 88.5% | 200 each |
+| - irrelevance detection | 60.42% | 240 |
+| Live overall (AST) | 79.64% | 1,127 |
+| - simple / multiple / parallel / parallel-multiple | 87.98 / 77.97 / 75.0 / 66.67% | 258 / 1,053 / 16 / 24 |
+| - irrelevance / relevance detection | 67.65 / 87.50% | 884 / 16 |
+| Latency mean / p95 (reasoning on) | 35.9 s / 86.0 s | - |
+
+Ignore the CSV's "Overall Acc 23.17%": BFCL averages in the multi_turn and
+agentic categories, which were not run, as zero. Every one of the 3,401
+tool-call frames parsed (no AST decode errors); the misses are wrong
+arguments and, above all, calling a tool when none applied (irrelevance
+60-68%). That over-eagerness is worth knowing for agent use, but it is a
+model behaviour, not a serving defect. Prompts are all under ~4K tokens,
+so this is a short-context baseline for the tool-call path only; it says
+nothing about the >150K garble (see the garble investigation).
+
+Run mechanics learned: the server caps running requests at 16, so
+`THREADS` above 16 only queues (32 was used; 16 ran). At 16 streams the
+full single_turn set took ~60 min plus a ~1 min evaluate. BFCL resumes:
+existing result files are loaded and their ids skipped, so a killed run
+loses only in-flight requests.

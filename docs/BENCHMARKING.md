@@ -135,6 +135,13 @@ BASE_URL=https://<node>.<tailnet>.ts.net:8000/v1 \
   dies on `ModuleNotFoundError` without it.
 - API key: `VLLM_API_KEY` from the environment, nothing else. The script
   exits early if it is unset.
+- Concurrency: vLLM caps running requests (16 on the GLM recipes), so
+  `THREADS` above that cap only queues. `single_turn` (3,401 cases) took
+  ~60 min at 16 streams with reasoning on (mean latency ~36 s, p95 ~86 s).
+  A killed run resumes: existing result ids are skipped.
+- The CSV "Overall Acc" averages every BFCL category, counting unrun ones
+  (multi_turn, agentic) as zero. Read `data_non_live.csv` and
+  `data_live.csv` for the categories you actually ran.
 - Categories: any BFCL collection (`single_turn`, `multi_turn`, `live`) or
   leaf (`simple_python`, `multiple`, `parallel`, `irrelevance`,
   `multi_turn_long_context`). Results (JSON + score CSVs) land in `OUTDIR`
