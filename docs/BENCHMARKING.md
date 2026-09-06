@@ -106,6 +106,46 @@ shows the per-depth acceptance decay - the lever for tuning
 wastes less draft compute. A fresh engine boot zeroes these counters, so
 one boot per variant gives a clean per-variant reading.
 
+## Tool calling - BFCL (`tools/bfcl-bench.sh`)
+
+Neither llama-benchy (speed) nor lm-eval (gsm8k/ruler) exercises the
+tool-call path: native `tools` on `/v1/chat/completions` parsed server-side
+by the recipe's `--tool-call-parser` (glm47, hermes, deepseek_v4). The
+Berkeley Function-Calling Leaderboard (BFCL v4) is the public, comparable
+measure of that path. Run it after any image, recipe, or checkpoint change
+that could touch the tool-call contract.
+
+```bash
+# on the head node (127.0.0.1:8000 always works); VLLM_API_KEY must be exported
+tools/bfcl-bench.sh glm-5.3-flash-uncensored-nvfp4 single_turn
+# or against the tailnet URL from anywhere
+BASE_URL=https://<node>.<tailnet>.ts.net:8000/v1 \
+  tools/bfcl-bench.sh glm-5.3-flash-uncensored-nvfp4 single_turn multi_turn live
+```
+
+- Talks the OpenAI API only (native FC), so - unlike lm-eval/llama-benchy -
+  it needs NO local tokenizer and no model download. The generic
+  `OpenAICompletionsHandler` is used deliberately; BFCL's OSS-model path
+  formats prompts client-side and would bypass the server's tool parser.
+- The script installs a version-pinned bfcl-eval into a tmp venv (never
+  `$HOME`), registers the served model as a generic OpenAI FC model, checks
+  reachability + key before the slow install, and runs generate + evaluate.
+- `soundfile` is pinned alongside bfcl-eval: it is an unpinned transitive
+  import of `qwen_agent` that BFCL loads at registry-import time, and the CLI
+  dies on `ModuleNotFoundError` without it.
+- API key: `VLLM_API_KEY` from the environment, nothing else. The script
+  exits early if it is unset.
+- Categories: any BFCL collection (`single_turn`, `multi_turn`, `live`) or
+  leaf (`simple_python`, `multiple`, `parallel`, `irrelevance`,
+  `multi_turn_long_context`). Results (JSON + score CSVs) land in `OUTDIR`
+  (a tmp dir), NOT git - transcribe the headline accuracy into the recipe's
+  docs page per the provenance rule below.
+
+**CAVEAT: BFCL prompts are short (<~4K tokens).** This scores general
+tool-call correctness, comparable to public GLM/Qwen numbers. It does NOT
+probe the long-context tool-call boundary (where this cluster's episodic
+garble lives, ctx >~150K); keep that a separate probe.
+
 ## Refusal / abliteration probe
 
 For abliterated checkpoints, `tools/refusal-probe.py` is the ONLY gate
