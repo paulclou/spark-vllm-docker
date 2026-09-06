@@ -467,3 +467,63 @@ never pipe through `head`), and reading spec-decode acceptance off
   shapes/text image and a bar chart sent as base64 data URIs to
   /v1/chat/completions are described exactly (no extra serve flags needed;
   matches the base recipe's MM validation).
+
+## Garble investigation - single-turn serving exonerated (2026-09-06)
+
+Symptom: the uncensored endpoint episodically emits gibberish in agent
+sessions, perceived onset "random after ~150K+ context", multiple evenings
+(latest 2026-09-05). Investigated 2026-09-06; the result is a negative that
+narrows the search, not a fix.
+
+Server-side forensics for the 2026-09-05 evening: healthy on every known
+signature. One unit and one engine per node (no sibling-unit crash loop, no
+leaked engines), 0 restarts, zero journal warnings, DFlash2 mean acceptance
+length 3.3-4.1 all night with no sustained collapse, KV usage <=8.7%. The KV
+pool is 6,548,378 tokens (boot log), so the observed 2.0-4.3% single-request
+usage corresponds to real 130-275K-token requests - the reported regime was
+genuinely exercised while metrics stayed clean.
+
+Ruled out the same day:
+- Stale/divergent image: local `vllm-node-glm5.3-flash` is byte-identical
+  (RepoDigest sha256:4def0ef6...) to tonyd2wild's newest published tag
+  (`sm121-v11-dflash2`; only v8 exists besides it).
+- ModelOpt NVFP4 token corruption (vLLM #54150, the reason tonyd2wild's
+  recipes default to RedHatAI): our checkpoint's `quant_method` is
+  `compressed-tensors`, not ModelOpt.
+- tonyd2wild changelog: no garble reports on the GLM/DFlash2 lane at all;
+  his topkfix/CUDA-graph finding (deadlock, not garble) is a different mode.
+
+Reproduction probe (30/30 clean). Deterministic filler document with three
+embedded passphrases; task = exact retrieval + per-section summaries;
+automated garble detectors (needle miss, >=25x repeated 4-gram, >2% CJK
+ratio, special-token leak) over reasoning + answer; unique per-run salt
+defeats prefix-cache reuse. Run on the head against 127.0.0.1:8000 on the
+live production server (no restarts, deployed config incl. CUDA graphs
+FULL_AND_PIECEWISE, fp8 KV, DFlash2 k=7):
+
+| Phase | Variables | Result |
+| --- | --- | --- |
+| 1 | 120K/160K/200K x5, temp 0, concurrency 2 | 15/15 clean |
+| 1b | 160K/200K x5, temp 1.0 top_p 0.95 | 10/10 clean |
+| 1c | 160K x5, temp 1.0 + continuous short-request churn (batch condense under a decoding long request) | 5/5 clean |
+
+Probe landmines (for reruns): vLLM's `/tokenize` is at the server root, not
+under `/v1`; an empty `content` with `finish_reason=length` means the
+reasoning phase exhausted `max_tokens` (raise to 3072 and read
+`reasoning_content`) - it is not garble; a deliberately repetitive filler
+makes the model legitimately repeat a template sentence, so a repetition
+threshold of 10 false-positives (use >=25). Tooling lives on the head node:
+`~/probe_glm_garble.py`, outputs in `~/probe-glm-garble/` (not vendored).
+
+Conclusion: context length (to 200K), production sampling, and ragged
+batching are each exonerated for single-turn serving. What production has
+and the probe does not is the multi-turn agentic path: streamed responses
+with accumulated tool-call markup and thinking blocks. Leading hypothesis is
+the client-side markup-leak lock-in class (one malformed tool-call frame the
+`glm47` parser misses lands as text, is replayed every turn, and degrades
+the session) - which also reframes the "150K+" correlation as turn count,
+not KV depth: more turns, more chances for one bad frame. Next step requires
+a captured garbled transcript (client + timestamp): raw tool-call markup in
+it implicates the client healer path; token salad mid-thinking with no
+markup implicates the server, and only then is the config knob matrix
+(enforce-eager / no-spec / fusion passes off) worth its restarts.
