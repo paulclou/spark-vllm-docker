@@ -527,16 +527,39 @@ The detokenizer then renders U+FFFD, e.g. `안내해 �릴게요`.
 - Not deterministic run to run at temperature 0 (3 reruns of the 18
   affected cases: 11/9/7 still broken, positions move) - the server is
   non-deterministic at greedy even when idle, so near-ties flip.
-- Remaining suspects: the orcarouter abliteration/re-quant, or the GB10
-  serving stack (marlin NVFP4 MoE kernels, fusion passes, topk mod) -
-  both act on prefill. Discriminator: serve the stock LibertAIDAI NVFP4
-  on the same stack and rerun the 18 ids (requires stopping the
-  uncensored unit - never start it alongside, see the sibling-unit
-  incident).
+- **Root cause: vLLM #54150, the fused-MoE NVFP4 single-global-scale
+  bug** - and PR #30's rule-out of it was wrong. `compressed_tensors_moe_w4a4_nvfp4.py`
+  `process_weights_after_loading` repacks the fused `[gate; up]` expert
+  GEMM with ONE global scale, gate's (`w13_weight_global_scale[:, 0]`),
+  and merely logs when up's differs. Our boot log (2026-09-03 06:42:33)
+  carries that log line: `w1_weight_global_scale must match
+  w3_weight_global_scale. Accuracy may be affected.` Measured over the
+  orcarouter checkpoint's safetensors: 12,096 gate/up expert pairs, only
+  31.5% equal; up/gate ratio mean 1.095, median 1.078, p90 1.23, max
+  9.96 - the same distribution mechramc measured on a ModelOpt checkpoint
+  in the issue (30.9% equal, max 10.0). So orcarouter is a ModelOpt-style
+  per-tensor-amax quant re-exported as compressed-tensors; the format
+  changed the loader path but not the bug, which lives in both loaders.
+  Every expert's up projection is mis-scaled by up to 10x, which is the
+  logit damage that drops bytes. The issue's reporter and two
+  independent reproductions (one on 2x GB10, same vLLM commit
+  `0.1.dev20051+g487ecf187` as ours) show 0 U+FFFD once the scales are
+  reconciled; RedHatAI's llm-compressor checkpoint is immune only because
+  its gate/up scales are equal by construction. LibertAIDAI stock (our
+  base recipe's checkpoint, ModelOpt) is affected too.
+- Fix options, both need a restart: (a) a `mods/` patch to
+  `compressed_tensors_moe_w4a4_nvfp4.py` that requantizes the up half's
+  E4M3 block scales onto a shared per-expert global scale (two validated
+  variants are in the issue thread; ~20 lines; no upstream PR as of
+  2026-09-06, issue open); (b) a checkpoint whose gate/up scales are
+  equal (RedHatAI stock; no uncensored equivalent known).
 - Relevance to the agent garble: this is a constant, short-context source
   of exactly the "stray CJK/emoji, 1-3 chars" tail noise seen in the
-  poisoned OMP session, and once such noise is in the transcript the
-  in-context-imitation lock-in can take over.
+  poisoned OMP session, and tonyd2wild's recipe notes describe the same
+  bug's agent-side face: "when a corrupted token lands inside a tool-call
+  block the parser desyncs and generation can spiral into a repetition
+  lock." Once such noise is in the transcript the in-context-imitation
+  lock-in takes over.
 
 **2. Misnamed tool -> raw markup returned as content (2 of 3,401).**
 In `parallel_173` and `parallel_multiple_95` the model wrote
