@@ -139,6 +139,11 @@ BASE_URL=https://<node>.<tailnet>.ts.net:8000/v1 \
   `THREADS` above that cap only queues. `single_turn` (3,401 cases) took
   ~60 min at 16 streams with reasoning on (mean latency ~36 s, p95 ~86 s).
   A killed run resumes: existing result ids are skipped.
+- Scan the raw responses, not just the score: BFCL's accuracy hides
+  garble. Grep `result/**/*.json` for U+FFFD, `<tool_call>` inside string
+  results, CJK ratio, and long repeats (see docs/GLM53_FLASH.md for what
+  this found). `--run-ids` with a `test_case_ids_to_generate.json` under a
+  fresh `BFCL_PROJECT_ROOT` reruns just the flagged ids.
 - The CSV "Overall Acc" averages every BFCL category, counting unrun ones
   (multi_turn, agentic) as zero. Read `data_non_live.csv` and
   `data_live.csv` for the categories you actually ran.

@@ -491,13 +491,68 @@ under `/tmp/bfcl-harness/result-glm-5.3-flash-uncensored-nvfp4/score/`.
 | Latency mean / p95 (reasoning on) | 35.9 s / 86.0 s | - |
 
 Ignore the CSV's "Overall Acc 23.17%": BFCL averages in the multi_turn and
-agentic categories, which were not run, as zero. Every one of the 3,401
-tool-call frames parsed (no AST decode errors); the misses are wrong
+agentic categories, which were not run, as zero. The misses are wrong
 arguments and, above all, calling a tool when none applied (irrelevance
-60-68%). That over-eagerness is worth knowing for agent use, but it is a
-model behaviour, not a serving defect. Prompts are all under ~4K tokens,
-so this is a short-context baseline for the tool-call path only; it says
-nothing about the >150K garble (see the garble investigation).
+60-68%) - model behaviour, not a serving defect. Prompts are all under
+~4K tokens, so this is a short-context baseline for the tool-call path
+only; it says nothing about the >150K garble by itself. A scan of the raw
+responses did, however, surface two short-context defects (next section).
+
+### Short-context garble found in the BFCL responses (2026-09-06)
+
+Scanning all 3,641 stored BFCL responses for garble signatures (CJK ratio,
+repetition, U+FFFD, leaked markup) found two real, reproducible effects on
+the live production server. Neither is length-related.
+
+**1. Dropped UTF-8 bytes -> U+FFFD (16 of 3,641 responses, 0.44%).** Every
+hit is in Korean text or at an emoji, in categories where the live
+dataset has Korean prompts. Anatomy, verified with `logprobs` +
+`return_token_ids` at temperature 0: the tokenizer encodes rare syllables
+as byte-fallback tokens (e.g. ` 드릴` = ids 55463 `' \xeb\x93'`, 250
+`'\x9c'`, 20058 `'\xeb\xa6'`, 112 `'\xb4'`). The model emits 55463 and
+then jumps straight to 20058 with p~0.98; byte token 250 is not in its
+top-5. Same at ` 냉방` (drops id 231) and at emoji (drops the last byte).
+The detokenizer then renders U+FFFD, e.g. `안내해 �릴게요`.
+- Every emitted token is the target's own top-1 (0 non-argmax positions in
+  300 and 388 token responses), and the same defect appears in
+  `prompt_logprobs` when the canonical text is forced into the prompt
+  (id 250 rank 3, lp -4.03, vs the skipping continuation at -0.28). So
+  speculative decoding, decode kernels, and CUDA graphs are exonerated:
+  the served model's distribution is wrong on the prefill path too.
+- Raw `/v1/completions` shows the same U+FFFD counts, so the glm47 parser
+  and reasoning parser are exonerated.
+- The tokenizer is byte-identical (sha256 19e77364...) across the
+  uncensored, LibertAIDAI stock NVFP4, and Mia EXL3 snapshots, so it is
+  not a tokenizer mismatch.
+- Not deterministic run to run at temperature 0 (3 reruns of the 18
+  affected cases: 11/9/7 still broken, positions move) - the server is
+  non-deterministic at greedy even when idle, so near-ties flip.
+- Remaining suspects: the orcarouter abliteration/re-quant, or the GB10
+  serving stack (marlin NVFP4 MoE kernels, fusion passes, topk mod) -
+  both act on prefill. Discriminator: serve the stock LibertAIDAI NVFP4
+  on the same stack and rerun the 18 ids (requires stopping the
+  uncensored unit - never start it alongside, see the sibling-unit
+  incident).
+- Relevance to the agent garble: this is a constant, short-context source
+  of exactly the "stray CJK/emoji, 1-3 chars" tail noise seen in the
+  poisoned OMP session, and once such noise is in the transcript the
+  in-context-imitation lock-in can take over.
+
+**2. Misnamed tool -> raw markup returned as content (2 of 3,401).**
+In `parallel_173` and `parallel_multiple_95` the model wrote
+`investment_predictProFit` and `cosine_similarity_calculator` for the
+declared `investment_predictProfit` / `cosine_similarity_calculate`. The
+glm47 parser runs with `validate_tool_names=True`, so the frame is
+rejected and the entire output, `<tool_call>...</tool_call>` markup
+included, comes back as `content`. Reproduced 1/3 reruns (with a
+different misspelling, `cosine_similarity_cal`). For an agent client
+this is the "tool-call markup leaked as text" event that poisons a
+session; the fix is client-side healing or a parser that surfaces the
+rejected frame instead of dumping it into content.
+
+Repro tooling stays on the head: `/tmp/bfcl-harness/repro_ids.json`
+(the 18 ids) with `BFCL_PROJECT_ROOT=<dir> bfcl generate --run-ids`, and
+`/tmp/entry_149.json` (the Korean ThinQ prompt) for direct probes.
 
 Run mechanics learned: the server caps running requests at 16, so
 `THREADS` above 16 only queues (32 was used; 16 ran). At 16 streams the
