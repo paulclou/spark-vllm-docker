@@ -41,6 +41,10 @@ cluster_only: true
 
 mods:
   - mods/fix-glm53-topk-sm120
+  # vLLM #54150: fused NvFp4 MoE drops w3's global scale when it differs from
+  # w1's (68.5% of this checkpoint's experts, up to 10x) -> U+FFFD garble in
+  # Korean/emoji text. Requantizes block scales onto a shared per-expert scale.
+  - mods/fix-nvfp4-moe-global-scale
   # kpool tail slot-map clamp (silent corruption on generations >~2K tokens,
   # mechanism credited to vcruz305) + XGrammar termination backports.
   # Vendored from Mia's overlay; exonerated of side effects by the KV A/B.
