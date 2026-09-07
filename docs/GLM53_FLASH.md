@@ -82,13 +82,26 @@ requantize") and matches the two validated variants in the issue thread
 (8/6 -> 0/6 U+FFFD on 2x GB10 at our vLLM commit `0.1.dev20051+g487ecf187`).
 Fail-closed on anchor drift; test: `tests/test_fix_nvfp4_moe_global_scale_mod.sh`.
 
-Verification protocol after the first restart with the mod: the boot log
-line changes to `... requantizing the block scales onto a shared per-expert
-global scale (vLLM #54150)`, then rerun the 18 flagged BFCL ids
-(`/tmp/bfcl-harness/repro_ids.json` on the head, `BFCL_PROJECT_ROOT=<dir>
-bfcl generate --run-ids`) and expect 0 U+FFFD (7-11 of 18 before the mod).
-GSM8K/RULER/refusal should be unchanged within noise; a measurable change
-would indicate the requant touched more than it should.
+Verified live 2026-09-07 (first boot with the mod, 09:16 CDT; the mod
+reported `patched` for both loader files on all four nodes and the boot log
+line became `w1_weight_global_scale != w3_weight_global_scale; requantizing
+the block scales onto a shared per-expert global scale (vLLM #54150)`):
+
+| Probe (temperature 0) | before the mod | with the mod |
+| --- | --- | --- |
+| Korean ThinQ prompt, chat+tools, U+FFFD per run | 5 / 4 / 5 | 0 / 0 / 0 |
+| same prompt, raw `/v1/completions` | 7 / 6 | 0 / 0 |
+| forced ` 드릴`: rank / logprob of byte token 250 | rank 3 / -4.03 | rank 1 / -0.00 |
+| 18 flagged BFCL ids, responses with U+FFFD (3 passes) | 11 / 9 / 7 | 0 / 0 / 0 |
+| 18 flagged BFCL ids, total U+FFFD chars (3 passes) | 65 | 0 |
+| raw `<tool_call>` markup in content | 1 of 54 | 0 of 54 |
+| DFlash2 accepted tokens per draft (metrics since boot) | 3.3-4.1 | 3.4 |
+
+Rerun recipe: `/tmp/bfcl-harness/repro_ids.json` on the head with
+`BFCL_PROJECT_ROOT=<fresh dir> bfcl generate --run-ids`. KV pool at this
+boot: 6,679,972 tokens (6.37x at 1M). GSM8K/RULER/refusal not yet re-run on
+the patched build; expected unchanged within noise, and a measurable change
+would mean the requant touched more than it should.
 
 ## Known limits / tuning levers
 
