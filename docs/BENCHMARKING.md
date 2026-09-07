@@ -65,13 +65,26 @@ uvx --from "lm_eval[api]" --with transformers lm_eval \
 ```
 
 RULER: `--tasks niah_single_2,niah_multikey_1,ruler_vt`, one length via
-`--metadata '{"max_seq_lengths":[<LEN>]}'`, and **`--gen_kwargs
-max_gen_toks=256`** (mandatory - the default budget truncates chat-model
-ruler_vt answers and invalidates the score). 25 samples/length
-(`--limit 25`).
+`--metadata '{"max_seq_lengths":[<LEN>]}'`, **`max_length=1050000` in
+`--model_args`** (mandatory, see the first landmine below), and
+**`--gen_kwargs max_gen_toks=256`** (mandatory - the default budget
+truncates chat-model ruler_vt answers and invalidates the score). 25
+samples/length (`--limit 25`).
 
-### lm-eval landmines (each cost real time, 2026-08-31)
+### lm-eval landmines (each cost real time, 2026-08-31 and 2026-09-07)
 
+- **Pass `max_length=<served context>` in `--model_args` for anything
+  longer than ~1.8K tokens.** `local-completions` defaults to
+  `max_length=2048` and silently LEFT-TRUNCATES every prompt to
+  `max_length - 1 - max_gen_toks` tokens before sending it (lm-eval
+  0.4.13, `api_models.py`). No warning is printed. RULER 8K then scores
+  0.16-0.32 and 64K scores ~0 - the needle is cut off and the model answers
+  with whatever number is left in the tail of the essay - which looks
+  exactly like a catastrophic model regression. The 2026-08-31 runs used
+  `max_length=1050000`; this line was missing from the invocation above
+  until 2026-09-07 and cost an hour of false-alarm debugging against a
+  freshly patched server. If RULER drops while GSM8K holds, check this
+  first: replay one failing prompt by hand through `/v1/completions`.
 - **Validate the request count before trusting the table.** A partial or
   dropped run looks like a clean pass. Confirm fired ==
   tasks x lengths x limit (e.g. 3 x 1 x 25 = 75).
