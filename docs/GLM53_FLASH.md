@@ -487,9 +487,16 @@ Ruled out the same day:
 - Stale/divergent image: local `vllm-node-glm5.3-flash` is byte-identical
   (RepoDigest sha256:4def0ef6...) to tonyd2wild's newest published tag
   (`sm121-v11-dflash2`; only v8 exists besides it).
-- ModelOpt NVFP4 token corruption (vLLM #54150, the reason tonyd2wild's
-  recipes default to RedHatAI): our checkpoint's `quant_method` is
-  `compressed-tensors`, not ModelOpt.
+- ~~ModelOpt NVFP4 token corruption (vLLM #54150): our checkpoint's
+  `quant_method` is `compressed-tensors`, not ModelOpt.~~ **Wrong, retracted
+  2026-09-07.** The format is not the discriminator; equality of the
+  gate/up (w1/w3) per-expert global scales is, and orcarouter's differ on
+  68.5% of experts (max 9.96x) exactly like LibertAIDAI's. The
+  compressed-tensors loader has the same single-gscale shortcut as the
+  ModelOpt one, and our boot log carried its warning. This is a real,
+  constant, short-context garble source (U+FFFD in Korean/emoji), found by
+  the BFCL response scan and fixed by `mods/fix-nvfp4-moe-global-scale`;
+  see "The NVFP4 global-scale mod" and the BFCL sections.
 - tonyd2wild changelog: no garble reports on the GLM/DFlash2 lane at all;
   his topkfix/CUDA-graph finding (deadlock, not garble) is a different mode.
 
@@ -527,3 +534,14 @@ a captured garbled transcript (client + timestamp): raw tool-call markup in
 it implicates the client healer path; token salad mid-thinking with no
 markup implicates the server, and only then is the config knob matrix
 (enforce-eager / no-spec / fusion passes off) worth its restarts.
+
+Postscript (2026-09-07): the "single-turn serving exonerated" verdict held
+only for what this probe measured - English filler, no tool calls, detectors
+tuned for salad and repetition. A scan of 3,641 BFCL responses the next day
+found a constant short-context defect the probe could not see: dropped
+UTF-8 bytes in Korean/emoji text (vLLM #54150, the item retracted above),
+plus misnamed tool calls whose whole frame is returned as text by the glm47
+parser's name validation. Both are exactly the "stray CJK/emoji, 1-3 chars"
+and "markup leaked as text" ingredients of the poisoned OMP session. The
+byte-drop is fixed (mod verified live 2026-09-07); whether the agent garble
+disappears with it is the next thing to watch.
