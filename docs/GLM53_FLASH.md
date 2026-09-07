@@ -99,9 +99,35 @@ the block scales onto a shared per-expert global scale (vLLM #54150)`):
 
 Rerun recipe: `/tmp/bfcl-harness/repro_ids.json` on the head with
 `BFCL_PROJECT_ROOT=<fresh dir> bfcl generate --run-ids`. KV pool at this
-boot: 6,679,972 tokens (6.37x at 1M). GSM8K/RULER/refusal not yet re-run on
-the patched build; expected unchanged within noise, and a measurable change
-would mean the requant touched more than it should.
+boot: 6,679,972 tokens (6.37x at 1M).
+
+Quality gates re-run on the patched build the same day (same protocol as
+2026-08-31, head-node localhost over plain HTTP, results under
+`~/quality-gates-20260907/` on the head):
+
+| Gate | 2026-08-31 unpatched | 2026-09-07 patched |
+| --- | --- | --- |
+| GSM8K 200q 5-shot (flex / strict) | 91.0 / 91.0 % (+/-2.0) | 94.5 / 94.5 % (+/-1.6) |
+| RULER 8K (s2 / mk1 / vt), 75/75 requests | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| RULER 64K, 75/75 | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| RULER 131K, 75/75 | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| Refusal benign / sensitive | 0/8 / 0/8 | 0.0% / 0.0% |
+| llama-benchy pp2048 / tg128 (3 runs) | 1674 / 56.0 tok/s | 2196 +/- 54 / 54.9 +/- 0.8 tok/s |
+| DFlash2 accepted tokens per draft | 3.3-4.1 | 3.4 |
+
+Unchanged within noise on every quality gate (GSM8K +3.5 is inside the
+combined error bars). The prefill number is not attributable to the mod,
+which runs at weight-load time only: the 08-31 figure was measured through
+the TLS launcher over the network, today's on localhost. One false alarm on
+the way is worth recording: the first RULER pass came back 0.16-0.32 at 8K
+and ~0 at 64K because the documented invocation lacked
+`max_length=1050000` and lm-eval silently left-truncated every prompt to
+2048 tokens (see the landmine in `docs/BENCHMARKING.md`). Before that was
+found, the patched server was cleared directly: identical prompts replayed
+by hand scored 10/10 as text and as the same 8,071 token ids, 20/20 at
+8-wide concurrency, 10/10 with 92% prefix-cache hits, and the real block
+scales (min 5.5, typical 72-352) show zero fp8 underflow after the
+requant (effective-scale error 1-2% vs 5-20% unpatched).
 
 ## Known limits / tuning levers
 
