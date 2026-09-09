@@ -26,9 +26,11 @@
 #   deepseek_r1 reasoning parser (LibertAI card; glm45 - official's choice -
 #   not disproven, our early probe read the wrong response field),
 #   clear_thinking=true, --enable-prefix-caching stated explicitly (vLLM
-#   default is already on; stating it makes the assumption visible).
-# Reasoning arrives in message.reasoning; clients dial effort with
-# chat_template_kwargs {"reasoning_effort": "low"|"high"|"max"}.
+#   default is already on; stating it makes the assumption visible),
+#   reasoning_effort=high server default (Paul, 2026-09-09; template default
+#   is max - measured trade-off in docs/GLM53_FLASH.md).
+# Reasoning arrives in message.reasoning; clients override effort per
+# request with chat_template_kwargs {"reasoning_effort": "low"|"high"|"max"}.
 
 recipe_version: "1"
 name: GLM-5.3-Flash-NVFP4
@@ -83,4 +85,4 @@ command: |
       --enable-auto-tool-choice \
       --reasoning-parser deepseek_r1 \
       --speculative-config '{{"method":"dflash","model":"incoai/GLM-5.3-Flash-DFlash2","num_speculative_tokens":7,"draft_sample_method":"probabilistic","rejection_sample_method":"standard"}}' \
-      --default-chat-template-kwargs '{{"clear_thinking": true}}'
+      --default-chat-template-kwargs '{{"clear_thinking": true, "reasoning_effort": "high"}}'

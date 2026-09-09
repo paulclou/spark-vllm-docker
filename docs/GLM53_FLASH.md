@@ -272,12 +272,17 @@ smoke-validated together):
 - --enable-prefix-caching stated explicitly (vLLM default is on).
 - KV pin: none (auto pool 6.69M tokens @0.85). The 24 GiB/rank pin was
   A/B'd and has no measured benefit (see KV-pool note above).
+- reasoning_effort=high as the server default (owner decision,
+  2026-09-09) via --default-chat-template-kwargs. The template's own
+  default is max; see "Reasoning-effort dial" below for the measured
+  trade-off and the per-request override.
 
 Thinking/parser findings (probed on the live endpoint):
 
 - Thinking is ALWAYS ON - the template has no enable_thinking kwarg.
   Clients dial it with chat_template_kwargs {"reasoning_effort":
-  "low"|"high"|"max"} (default max; measured: low ~50 think tokens/1.5s,
+  "low"|"high"|"max"} (template default max; the recipe pins high as the
+  server default since 2026-09-09; measured: low ~50 think tokens/1.5s,
   max ~310/7.8s). clear_thinking=true (zai chat recommendation) strips
   prior turns' think blocks from the prompt; set false only for
   benchmark repro/debugging of multi-turn reasoning.
@@ -354,11 +359,15 @@ Findings:
   that answered correctly (738; low said 657, high said 648, both
   confidently wrong). Token growth low->high->max is monotone on easy
   and hard; on the mid tier high ~= max within run noise.
-- **Do NOT default the server to high**: it reads as "max but cheaper"
-  until a genuinely hard problem arrives, where it fails where max
-  succeeds. Keep the server default at max (the recipe does, by
-  omission); latency-sensitive clients opt DOWN per request with
-  chat_template_kwargs {"reasoning_effort": "low"|"high"}.
+- **Server default is high (owner decision, 2026-09-09)**, set via
+  --default-chat-template-kwargs in both GLM recipes. The measured
+  trade-off stands: high reads as "max but cheaper" until a genuinely
+  hard problem arrives, where it fails where max succeeds (the
+  competition-math row above). Accepted for interactive latency; clients
+  that need the hard-tier solve opt UP per request with
+  chat_template_kwargs {"reasoning_effort": "max"} (or the top-level
+  reasoning_effort field, which this build injects into the template
+  kwargs). Before 2026-09-09 the recipe left the kwarg unset, i.e. max.
 - **Temp-0 is not bit-deterministic on this stack**: a repeated cell
   gave 243 vs 236 tokens, and unset-vs-max diverged on the mid tier
   (328 vs 211) despite identical templates - continuous-batching /
