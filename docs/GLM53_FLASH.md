@@ -53,6 +53,82 @@ that KV layout outside Mia's EXL3 overlay image, which carries the NoPE
 handling internally - so the mod was dropped from the branch (recoverable
 from git history if an fp8_ds_mla config returns).
 
+## The NVFP4 global-scale mod (mods/fix-nvfp4-moe-global-scale, 2026-09-07)
+
+Both GLM NVFP4 recipes carry this mod. It fixes vLLM
+[#54150](https://github.com/vllm-project/vllm/issues/54150) inside the
+container: the fused `[w1; w3]` NvFp4 MoE repack takes only w1's per-expert
+global scale and merely logs when w3's differs. Our boot log has that line
+(`w1_weight_global_scale must match w3_weight_global_scale. Accuracy may be
+affected.`), and the checkpoints have the mismatch: measured on the
+safetensors, 68.5% of the orcarouter checkpoint's 12,096 gate/up expert
+pairs differ (ratio median 1.078, p90 1.23, max 9.96); LibertAIDAI stock is
+the same quant (30.9%, max 10.0); RedHatAI is 100% equal by construction
+(llm-compressor fuses gate/up scales) and is unaffected. Every w3 weight in a
+mismatched expert is dequantized with the wrong global scale, and the model
+emits invalid UTF-8 byte-token sequences: U+FFFD in Korean and emoji text at
+temperature 0, present on the prefill path (`prompt_logprobs`), so spec
+decode, parsers, and tokenizer are exonerated. Found 2026-09-06 by scanning
+BFCL responses (16 of 3,641; see the BFCL section once PR #31 lands).
+
+The mod requantizes instead of dropping w3's scale: per expert it shares one
+global scale (the per-expert min for compressed-tensors' divisor
+`weight_global_scale`, the max for ModelOpt's multiplier `weight_scale_2`)
+and folds each shard's ratio, <= 1 by construction, into that shard's E4M3
+block scales. The dequantized weight is unchanged up to one extra E4M3
+rounding on the moved shard; nothing is clamped. This mirrors vLLM's own FP8
+MoE path (`process_fp8_weight_tensor_strategy_moe`, "use the max to
+requantize") and matches the two validated variants in the issue thread
+(8/6 -> 0/6 U+FFFD on 2x GB10 at our vLLM commit `0.1.dev20051+g487ecf187`).
+Fail-closed on anchor drift; test: `tests/test_fix_nvfp4_moe_global_scale_mod.sh`.
+
+Verified live 2026-09-07 (first boot with the mod, 09:16 CDT; the mod
+reported `patched` for both loader files on all four nodes and the boot log
+line became `w1_weight_global_scale != w3_weight_global_scale; requantizing
+the block scales onto a shared per-expert global scale (vLLM #54150)`):
+
+| Probe (temperature 0) | before the mod | with the mod |
+| --- | --- | --- |
+| Korean ThinQ prompt, chat+tools, U+FFFD per run | 5 / 4 / 5 | 0 / 0 / 0 |
+| same prompt, raw `/v1/completions` | 7 / 6 | 0 / 0 |
+| forced ` 드릴`: rank / logprob of byte token 250 | rank 3 / -4.03 | rank 1 / -0.00 |
+| 18 flagged BFCL ids, responses with U+FFFD (3 passes) | 11 / 9 / 7 | 0 / 0 / 0 |
+| 18 flagged BFCL ids, total U+FFFD chars (3 passes) | 65 | 0 |
+| raw `<tool_call>` markup in content | 1 of 54 | 0 of 54 |
+| DFlash2 accepted tokens per draft (metrics since boot) | 3.3-4.1 | 3.4 |
+
+Rerun recipe: `/tmp/bfcl-harness/repro_ids.json` on the head with
+`BFCL_PROJECT_ROOT=<fresh dir> bfcl generate --run-ids`. KV pool at this
+boot: 6,679,972 tokens (6.37x at 1M).
+
+Quality gates re-run on the patched build the same day (same protocol as
+2026-08-31, head-node localhost over plain HTTP, results under
+`~/quality-gates-20260907/` on the head):
+
+| Gate | 2026-08-31 unpatched | 2026-09-07 patched |
+| --- | --- | --- |
+| GSM8K 200q 5-shot (flex / strict) | 91.0 / 91.0 % (+/-2.0) | 94.5 / 94.5 % (+/-1.6) |
+| RULER 8K (s2 / mk1 / vt), 75/75 requests | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| RULER 64K, 75/75 | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| RULER 131K, 75/75 | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| Refusal benign / sensitive | 0/8 / 0/8 | 0.0% / 0.0% |
+| llama-benchy pp2048 / tg128 (3 runs) | 1674 / 56.0 tok/s | 2196 +/- 54 / 54.9 +/- 0.8 tok/s |
+| DFlash2 accepted tokens per draft | 3.3-4.1 | 3.4 |
+
+Unchanged within noise on every quality gate (GSM8K +3.5 is inside the
+combined error bars). The prefill number is not attributable to the mod,
+which runs at weight-load time only: the 08-31 figure was measured through
+the TLS launcher over the network, today's on localhost. One false alarm on
+the way is worth recording: the first RULER pass came back 0.16-0.32 at 8K
+and ~0 at 64K because the documented invocation lacked
+`max_length=1050000` and lm-eval silently left-truncated every prompt to
+2048 tokens (see the landmine in `docs/BENCHMARKING.md`). Before that was
+found, the patched server was cleared directly: identical prompts replayed
+by hand scored 10/10 as text and as the same 8,071 token ids, 20/20 at
+8-wide concurrency, 10/10 with 92% prefix-cache hits, and the real block
+scales (min 5.5, typical 72-352) show zero fp8 underflow after the
+requant (effective-scale error 1-2% vs 5-20% unpatched).
+
 ## Known limits / tuning levers
 
 - `--language-model-only`: multimodal front-end costs ~15.7 GiB on the API
