@@ -16,6 +16,7 @@
 #   tools/assert-window.sh -e 1048576 -f /tmp/foreground-launch.log
 #
 # A foreground launch writes to a file rather than journald, hence -f.
+# VLLM_API_KEY must be exported; it is the only place the key is read from.
 
 set -uo pipefail
 
@@ -23,15 +24,13 @@ EXPECTED=1048576
 UNIT=""
 LOGFILE=""
 BASE="${BASE:-https://localhost:8000}"
-KEYFILE="${KEYFILE:-$HOME/.vllm-api-key}"
 
-while getopts "e:u:f:b:k:h" opt; do
+while getopts "e:u:f:b:h" opt; do
     case "$opt" in
         e) EXPECTED="$OPTARG" ;;
         u) UNIT="$OPTARG" ;;
         f) LOGFILE="$OPTARG" ;;
         b) BASE="$OPTARG" ;;
-        k) KEYFILE="$OPTARG" ;;
         h|*) sed -n '2,20p' "$0"; exit 0 ;;
     esac
 done
@@ -75,8 +74,9 @@ fi
 
 # --- 2. what the server advertises -----------------------------------------
 key="${VLLM_API_KEY:-}"
-if [[ -z "$key" && -r "$KEYFILE" ]]; then
-    key="$(sed -n 's/^VLLM_API_KEY=//p' "$KEYFILE" | tr -d "\"'" | head -1)"
+if [[ -z "$key" ]]; then
+    note "FAIL  VLLM_API_KEY is not set; export it before running"
+    exit 1
 fi
 
 served="$(curl -sk --max-time 30 -H "Authorization: Bearer $key" "$BASE/v1/models" \

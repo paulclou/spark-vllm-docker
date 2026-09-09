@@ -18,8 +18,10 @@ system bundle and breaks uv's own PyPI fetches. `tools/bench-serving.py`
 uses `CERT_NONE` and the probe scripts take `--insecure`; neither is
 required against the tailnet URL.
 
-The API key is `docker exec vllm_node printenv VLLM_API_KEY` (the host
-`~/.vllm-api-key` may not match). Never echo it into a shared log.
+The API key is always `VLLM_API_KEY`, exported in the shell that runs the
+tool. Every script and command below reads it from the environment and
+nowhere else - no key file, no `docker exec`, no ssh lookup. Never echo it
+into a shared log.
 
 ## Host setup
 
@@ -31,10 +33,9 @@ huggingface.co, so run evals on a node and pass LOCAL paths.
 ## Speed - llama-benchy
 
 ```bash
-KEY=$(docker exec vllm_node printenv VLLM_API_KEY)
 SNAP=$(ls -d ~/.cache/huggingface/hub/models--<ORG>--<MODEL>/snapshots/*/)
 uvx llama-benchy@0.4.0 \
-  --base-url https://<node>.<tailnet>.ts.net:8000/v1 --api-key "$KEY" \
+  --base-url https://<node>.<tailnet>.ts.net:8000/v1 --api-key "$VLLM_API_KEY" \
   --model <served-name> --tokenizer "$SNAP" \
   --pp 2048 --tg 128 --runs 3 \
   --save-result ~/bench.json --format json
@@ -55,7 +56,7 @@ without it). For RULER add `,ruler` to the extra plus
 `--with wonderwords --with nltk`.
 
 ```bash
-OPENAI_API_KEY="$KEY" \
+OPENAI_API_KEY="$VLLM_API_KEY" \
 uvx --from "lm_eval[api]" --with transformers lm_eval \
   --model local-completions \
   --model_args "model=<served-name>,base_url=https://<node>.<tailnet>.ts.net:8000/v1/completions,num_concurrent=8,max_retries=3,tokenizer=$SNAP,trust_remote_code=True" \
@@ -64,13 +65,26 @@ uvx --from "lm_eval[api]" --with transformers lm_eval \
 ```
 
 RULER: `--tasks niah_single_2,niah_multikey_1,ruler_vt`, one length via
-`--metadata '{"max_seq_lengths":[<LEN>]}'`, and **`--gen_kwargs
-max_gen_toks=256`** (mandatory - the default budget truncates chat-model
-ruler_vt answers and invalidates the score). 25 samples/length
-(`--limit 25`).
+`--metadata '{"max_seq_lengths":[<LEN>]}'`, **`max_length=1050000` in
+`--model_args`** (mandatory, see the first landmine below), and
+**`--gen_kwargs max_gen_toks=256`** (mandatory - the default budget
+truncates chat-model ruler_vt answers and invalidates the score). 25
+samples/length (`--limit 25`).
 
-### lm-eval landmines (each cost real time, 2026-08-31)
+### lm-eval landmines (each cost real time, 2026-08-31 and 2026-09-07)
 
+- **Pass `max_length=<served context>` in `--model_args` for anything
+  longer than ~1.8K tokens.** `local-completions` defaults to
+  `max_length=2048` and silently LEFT-TRUNCATES every prompt to
+  `max_length - 1 - max_gen_toks` tokens before sending it (lm-eval
+  0.4.13, `api_models.py`). No warning is printed. RULER 8K then scores
+  0.16-0.32 and 64K scores ~0 - the needle is cut off and the model answers
+  with whatever number is left in the tail of the essay - which looks
+  exactly like a catastrophic model regression. The 2026-08-31 runs used
+  `max_length=1050000`; this line was missing from the invocation above
+  until 2026-09-07 and cost an hour of false-alarm debugging against a
+  freshly patched server. If RULER drops while GSM8K holds, check this
+  first: replay one failing prompt by hand through `/v1/completions`.
 - **Validate the request count before trusting the table.** A partial or
   dropped run looks like a clean pass. Confirm fired ==
   tasks x lengths x limit (e.g. 3 x 1 x 25 = 75).
@@ -104,6 +118,58 @@ shows the per-depth acceptance decay - the lever for tuning
 `num_speculative_tokens` (k): if deep positions rarely accept, a lower k
 wastes less draft compute. A fresh engine boot zeroes these counters, so
 one boot per variant gives a clean per-variant reading.
+
+## Tool calling - BFCL (`tools/bfcl-bench.sh`)
+
+Neither llama-benchy (speed) nor lm-eval (gsm8k/ruler) exercises the
+tool-call path: native `tools` on `/v1/chat/completions` parsed server-side
+by the recipe's `--tool-call-parser` (glm47, hermes, deepseek_v4). The
+Berkeley Function-Calling Leaderboard (BFCL v4) is the public, comparable
+measure of that path. Run it after any image, recipe, or checkpoint change
+that could touch the tool-call contract.
+
+```bash
+# on the head node (127.0.0.1:8000 always works); VLLM_API_KEY must be exported
+tools/bfcl-bench.sh glm-5.3-flash-uncensored-nvfp4 single_turn
+# or against the tailnet URL from anywhere
+BASE_URL=https://<node>.<tailnet>.ts.net:8000/v1 \
+  tools/bfcl-bench.sh glm-5.3-flash-uncensored-nvfp4 single_turn multi_turn live
+```
+
+- Talks the OpenAI API only (native FC), so - unlike lm-eval/llama-benchy -
+  it needs NO local tokenizer and no model download. The generic
+  `OpenAICompletionsHandler` is used deliberately; BFCL's OSS-model path
+  formats prompts client-side and would bypass the server's tool parser.
+- The script installs a version-pinned bfcl-eval into a tmp venv (never
+  `$HOME`), registers the served model as a generic OpenAI FC model, checks
+  reachability + key before the slow install, and runs generate + evaluate.
+- `soundfile` is pinned alongside bfcl-eval: it is an unpinned transitive
+  import of `qwen_agent` that BFCL loads at registry-import time, and the CLI
+  dies on `ModuleNotFoundError` without it.
+- API key: `VLLM_API_KEY` from the environment, nothing else. The script
+  exits early if it is unset.
+- Concurrency: vLLM caps running requests (16 on the GLM recipes), so
+  `THREADS` above that cap only queues. `single_turn` (3,401 cases) took
+  ~60 min at 16 streams with reasoning on (mean latency ~36 s, p95 ~86 s).
+  A killed run resumes: existing result ids are skipped.
+- Scan the raw responses, not just the score: BFCL's accuracy hides
+  garble. Grep `result/**/*.json` for U+FFFD, `<tool_call>` inside string
+  results, CJK ratio, and long repeats (see docs/GLM53_FLASH.md for what
+  this found). `--run-ids` with a `test_case_ids_to_generate.json` under a
+  fresh `BFCL_PROJECT_ROOT` reruns just the flagged ids.
+- The CSV "Overall Acc" averages every BFCL category, counting unrun ones
+  (multi_turn, agentic) as zero. Read `data_non_live.csv` and
+  `data_live.csv` for the categories you actually ran.
+- Categories: any BFCL collection (`single_turn`, `multi_turn`, `live`) or
+  leaf (`simple_python`, `multiple`, `parallel`, `irrelevance`,
+  `multi_turn_long_context`). Results (JSON + score CSVs) land in `OUTDIR`
+  (a tmp dir), NOT git - transcribe the headline accuracy into the recipe's
+  docs page per the provenance rule below.
+
+**CAVEAT: BFCL prompts are short (<~4K tokens).** This scores general
+tool-call correctness, comparable to public GLM/Qwen numbers. It does NOT
+probe the long-context tool-call boundary (where this cluster's episodic
+garble lives, ctx >~150K); keep that a separate probe.
 
 ## Refusal / abliteration probe
 

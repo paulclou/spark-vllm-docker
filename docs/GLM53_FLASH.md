@@ -467,6 +467,121 @@ never pipe through `head`), and reading spec-decode acceptance off
   shapes/text image and a bar chart sent as base64 data URIs to
   /v1/chat/completions are described exactly (no extra serve flags needed;
   matches the base recipe's MM validation).
+- Tool calling: `tools/bfcl-bench.sh glm-5.3-flash-uncensored-nvfp4
+  single_turn` on the head node (see below).
+
+### Tool calling - BFCL v4 single_turn (2026-09-06, live endpoint)
+
+Run on the head against 127.0.0.1:8000 on the live production config (no
+restarts; DFlash2 k=7, fp8 KV, glm47 parser, reasoning on). Invocation:
+`THREADS=32 tools/bfcl-bench.sh glm-5.3-flash-uncensored-nvfp4 single_turn`
+with `bfcl-eval==2026.3.23`. 3,401 cases, 1 request timeout
+(live_irrelevance_342-81-3, scored as wrong). Results stay on the head
+under `/tmp/bfcl-harness/result-glm-5.3-flash-uncensored-nvfp4/score/`.
+
+| BFCL v4 category | Accuracy | n |
+| --- | --- | --- |
+| Non-live overall (AST) | 88.00% | 1,390 |
+| - simple: Python / Java / JavaScript | 96.0 / 61.0 / 74.0% | 400 / 100 / 50 |
+| - multiple / parallel / parallel-multiple | 95.5 / 91.0 / 88.5% | 200 each |
+| - irrelevance detection | 60.42% | 240 |
+| Live overall (AST) | 79.64% | 1,127 |
+| - simple / multiple / parallel / parallel-multiple | 87.98 / 77.97 / 75.0 / 66.67% | 258 / 1,053 / 16 / 24 |
+| - irrelevance / relevance detection | 67.65 / 87.50% | 884 / 16 |
+| Latency mean / p95 (reasoning on) | 35.9 s / 86.0 s | - |
+
+Ignore the CSV's "Overall Acc 23.17%": BFCL averages in the multi_turn and
+agentic categories, which were not run, as zero. The misses are wrong
+arguments and, above all, calling a tool when none applied (irrelevance
+60-68%) - model behaviour, not a serving defect. Prompts are all under
+~4K tokens, so this is a short-context baseline for the tool-call path
+only; it says nothing about the >150K garble by itself. A scan of the raw
+responses did, however, surface two short-context defects (next section).
+
+### Short-context garble found in the BFCL responses (2026-09-06)
+
+Scanning all 3,641 stored BFCL responses for garble signatures (CJK ratio,
+repetition, U+FFFD, leaked markup) found two real, reproducible effects on
+the live production server. Neither is length-related.
+
+**1. Dropped UTF-8 bytes -> U+FFFD (16 of 3,641 responses, 0.44%).** Every
+hit is in Korean text or at an emoji, in categories where the live
+dataset has Korean prompts. Anatomy, verified with `logprobs` +
+`return_token_ids` at temperature 0: the tokenizer encodes rare syllables
+as byte-fallback tokens (e.g. ` 드릴` = ids 55463 `' \xeb\x93'`, 250
+`'\x9c'`, 20058 `'\xeb\xa6'`, 112 `'\xb4'`). The model emits 55463 and
+then jumps straight to 20058 with p~0.98; byte token 250 is not in its
+top-5. Same at ` 냉방` (drops id 231) and at emoji (drops the last byte).
+The detokenizer then renders U+FFFD, e.g. `안내해 �릴게요`.
+- Every emitted token is the target's own top-1 (0 non-argmax positions in
+  300 and 388 token responses), and the same defect appears in
+  `prompt_logprobs` when the canonical text is forced into the prompt
+  (id 250 rank 3, lp -4.03, vs the skipping continuation at -0.28). So
+  speculative decoding, decode kernels, and CUDA graphs are exonerated:
+  the served model's distribution is wrong on the prefill path too.
+- Raw `/v1/completions` shows the same U+FFFD counts, so the glm47 parser
+  and reasoning parser are exonerated.
+- The tokenizer is byte-identical (sha256 19e77364...) across the
+  uncensored, LibertAIDAI stock NVFP4, and Mia EXL3 snapshots, so it is
+  not a tokenizer mismatch.
+- Not deterministic run to run at temperature 0 (3 reruns of the 18
+  affected cases: 11/9/7 still broken, positions move) - the server is
+  non-deterministic at greedy even when idle, so near-ties flip.
+- **Root cause: vLLM #54150, the fused-MoE NVFP4 single-global-scale
+  bug** - and PR #30's rule-out of it was wrong. `compressed_tensors_moe_w4a4_nvfp4.py`
+  `process_weights_after_loading` repacks the fused `[gate; up]` expert
+  GEMM with ONE global scale, gate's (`w13_weight_global_scale[:, 0]`),
+  and merely logs when up's differs. Our boot log (2026-09-03 06:42:33)
+  carries that log line: `w1_weight_global_scale must match
+  w3_weight_global_scale. Accuracy may be affected.` Measured over the
+  orcarouter checkpoint's safetensors: 12,096 gate/up expert pairs, only
+  31.5% equal; up/gate ratio mean 1.095, median 1.078, p90 1.23, max
+  9.96 - the same distribution mechramc measured on a ModelOpt checkpoint
+  in the issue (30.9% equal, max 10.0). So orcarouter is a ModelOpt-style
+  per-tensor-amax quant re-exported as compressed-tensors; the format
+  changed the loader path but not the bug, which lives in both loaders.
+  Every expert's up projection is mis-scaled by up to 10x, which is the
+  logit damage that drops bytes. The issue's reporter and two
+  independent reproductions (one on 2x GB10, same vLLM commit
+  `0.1.dev20051+g487ecf187` as ours) show 0 U+FFFD once the scales are
+  reconciled; RedHatAI's llm-compressor checkpoint is immune only because
+  its gate/up scales are equal by construction. LibertAIDAI stock (our
+  base recipe's checkpoint, ModelOpt) is affected too.
+- Fix options, both need a restart: (a) a `mods/` patch to
+  `compressed_tensors_moe_w4a4_nvfp4.py` that requantizes the up half's
+  E4M3 block scales onto a shared per-expert global scale (two validated
+  variants are in the issue thread; ~20 lines; no upstream PR as of
+  2026-09-06, issue open); (b) a checkpoint whose gate/up scales are
+  equal (RedHatAI stock; no uncensored equivalent known).
+- Relevance to the agent garble: this is a constant, short-context source
+  of exactly the "stray CJK/emoji, 1-3 chars" tail noise seen in the
+  poisoned OMP session, and tonyd2wild's recipe notes describe the same
+  bug's agent-side face: "when a corrupted token lands inside a tool-call
+  block the parser desyncs and generation can spiral into a repetition
+  lock." Once such noise is in the transcript the in-context-imitation
+  lock-in takes over.
+
+**2. Misnamed tool -> raw markup returned as content (2 of 3,401).**
+In `parallel_173` and `parallel_multiple_95` the model wrote
+`investment_predictProFit` and `cosine_similarity_calculator` for the
+declared `investment_predictProfit` / `cosine_similarity_calculate`. The
+glm47 parser runs with `validate_tool_names=True`, so the frame is
+rejected and the entire output, `<tool_call>...</tool_call>` markup
+included, comes back as `content`. Reproduced 1/3 reruns (with a
+different misspelling, `cosine_similarity_cal`). For an agent client
+this is the "tool-call markup leaked as text" event that poisons a
+session; the fix is client-side healing or a parser that surfaces the
+rejected frame instead of dumping it into content.
+
+Repro tooling stays on the head: `/tmp/bfcl-harness/repro_ids.json`
+(the 18 ids) with `BFCL_PROJECT_ROOT=<dir> bfcl generate --run-ids`, and
+`/tmp/entry_149.json` (the Korean ThinQ prompt) for direct probes.
+
+Run mechanics learned: the server caps running requests at 16, so
+`THREADS` above 16 only queues (32 was used; 16 ran). At 16 streams the
+full single_turn set took ~60 min plus a ~1 min evaluate. BFCL resumes:
+existing result files are loaded and their ids skipped, so a killed run
+loses only in-flight requests.
 
 ## Garble investigation - single-turn serving exonerated (2026-09-06)
 

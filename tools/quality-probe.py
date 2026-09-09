@@ -126,14 +126,10 @@ VISION_PROBES = [
 
 
 def api_key():
-    if os.environ.get("VLLM_API_KEY"):
-        return os.environ["VLLM_API_KEY"]
-    path = os.environ.get("VLLM_API_KEY_FILE", "/home/paul/.vllm-api-key")
-    with open(path) as fh:
-        for line in fh:
-            if line.strip().startswith("VLLM_API_KEY="):
-                return line.strip().split("=", 1)[1].strip().strip("'\"")
-    raise SystemExit(f"no VLLM_API_KEY in {path}")
+    key = os.environ.get("VLLM_API_KEY", "")
+    if not key:
+        raise SystemExit("VLLM_API_KEY is not set; export it before running")
+    return key
 
 
 def ask(base, key, model, prompt, max_tokens, no_think, image=None):
