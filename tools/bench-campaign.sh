@@ -109,7 +109,8 @@ DEPTHS_DS4F="1000,75000,300000"
 # these variants vary speculation depth and the attention stack instead.
 transform_ds4f_k3() { sed 's/^  num_speculative_tokens: 5$/  num_speculative_tokens: 3/'; }
 
-# The base recipe pairs DSpark k=5 with B12X_MLA_SPARSE. Past the native window
+# The base recipe pairs DSpark k=5 with the B12X attention backend (upstream
+# switched it from B12X_MLA_SPARSE on 2026-09-02). Past the native window
 # the drafter may accept nothing, in which case five wasted drafter passes per
 # step cost more than they return -- the same shape as the MTP cliff above.
 transform_ds4f_nospec() { sed -e '/^      --speculative-config /d'; }
@@ -118,8 +119,8 @@ transform_ds4f_nospec() { sed -e '/^      --speculative-config /d'; }
 # AUTO and the V2 model runner off, because their older build rejects both. This
 # asks what that costs on our stack rather than assuming it costs nothing.
 transform_ds4f_theirs() {
-  sed -e '/^      --attention-backend B12X_MLA_SPARSE \\$/d' \
-      -e 's/,"attention_backend":"B12X_MLA_SPARSE"//' \
+  sed -e '/^      --attention-backend B12X \\$/d' \
+      -e 's/,"attention_backend":"B12X"//' \
       -e 's/^  VLLM_USE_V2_MODEL_RUNNER: "1"$/  VLLM_USE_V2_MODEL_RUNNER: "0"/'
 }
 

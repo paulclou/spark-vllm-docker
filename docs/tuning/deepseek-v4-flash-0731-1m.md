@@ -372,3 +372,37 @@ SM 12.x, which is what this recipe runs. Not reproduced here across ~100
 requests and five boots including four 200k+ prefills, but it is the
 likeliest explanation for third-party reports of this stack dying after 1–2
 hours.
+
+## Image baseline change (2026-09-09) — every number above is pre-0907
+
+Everything measured in this ledger ran on `eugr/spark-vllm-b12x` d20260815
+(the build with the eugr#356 garble regression) or the d20260812 rollback,
+both from the `local-inference-lab/vllm@dev/infernal-invocation` branch with
+`--attention-backend B12X_MLA_SPARSE` on target and draft.
+
+On 2026-09-09 eugr replied on eugr/spark-vllm-docker#356 that the regression
+is fixed in the latest image. The relevant changes, none of which exist in
+either image above:
+
+- b12x `cfce3d645` (2026-09-06): zero masked V rows in the DSV4 MLA decode and
+  prefill kernels before the MMA, because a zero probability does not mask
+  NaNs gathered from unused KV pages. Stale-page poisoning is the mechanism
+  that fits the hours-later onset; the DSpark row-alignment hypothesis that
+  drove the August investigation was not what shipped as the fix.
+- vLLM fork `b60c5e397` (2026-09-03) DeepSeek V4 DSpark decode metadata sizing,
+  and `277004a08` (2026-09-05) B12X sparse MLA cache/indexer planning.
+- Upstream switched the build to `dev/jovian-judgement` (2026-09-02, 821
+  commits diverged from the old branch) and moved the 0731 recipe to
+  `--attention-backend B12X` for both target and draft, capture 48,
+  `VLLM_USE_MEGA_AOT_ARTIFACT=1`, and `VLLM_MOE_SKIP_PADDING=0`.
+
+Recipe changes made alongside the upstream merge: backend `B12X` on target and
+draft, mega AOT artifact `1`. Kept: seqs 16 / capture 128 (fleet scheduling,
+unverified on the new branch — fall back to 48 if init fails), the MoE padding
+flag unset (measured neutral above), tp 4, pinned 1M window.
+
+Treat `nightly-20260907`+ as a new baseline. Nothing has been re-measured;
+first soak should watch mean acceptance length for the sustained sub-1.3
+signature described in the August notes. Fix is unconfirmed by anyone but the
+maintainer at the time of writing; per project decision we assume it works
+because the kernel fix is DSV4-specific.
