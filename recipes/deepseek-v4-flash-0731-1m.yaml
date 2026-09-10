@@ -10,13 +10,18 @@
 #   --max-model-len 1048576 - the value official takes implicitly by omitting
 #     the flag; stating it makes a shortfall a boot failure instead of a
 #     silently shorter window.
-#   max_num_seqs 16 / max_cudagraph_capture_size 128 (official 8 / 64) -
-#     fleet scheduling for concurrent agent sessions.
+#   max_num_seqs 16 / max_cudagraph_capture_size 128 (official 8 / 48) -
+#     fleet scheduling for concurrent agent sessions. 128 is unverified on
+#     the post-2026-09-02 b12x branch; if init fails on KV arithmetic, use 48.
 #   --served-model-name deepseek-v4-flash-0731-1m - client-facing id so a
 #     1,048,576-token window is distinguishable from the base recipe's on the
 #     same port.
 #   mods/instanttensor-hybrid-draft-loader - inherited from the base recipe;
 #     untested off.
+#
+# Requires eugr/spark-vllm-b12x nightly-20260907 or later (eugr#356 garble
+# fix). --attention-backend B12X follows upstream's 2026-09-02 switch; the
+# older B12X_MLA_SPARSE value belongs to the pre-0902 images only.
 #
 # Evidence, measured behaviour, tuning history (do NOT re-run those
 # campaigns), benchmark traps, and known risks:
@@ -57,7 +62,7 @@ env:
   CUTE_DSL_ARCH: "sm_121a"
   VLLM_USE_AOT_COMPILE: "1"
   VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
-  VLLM_USE_MEGA_AOT_ARTIFACT: "-1"
+  VLLM_USE_MEGA_AOT_ARTIFACT: "1"
   VLLM_MEMORY_PROFILE_INCLUDE_ATTN: "1"
   VLLM_USE_FLASHINFER_SAMPLER: "1"
   VLLM_USE_B12X_WO_PROJECTION: "1"
@@ -93,7 +98,7 @@ command: |
       --load-format instanttensor \
       --moe-backend b12x \
       --linear-backend b12x \
-      --attention-backend B12X_MLA_SPARSE \
+      --attention-backend B12X \
       --max-cudagraph-capture-size {max_cudagraph_capture_size} \
       --compilation-config '{{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}}' \
-      --speculative-config '{{"method":"dspark","num_speculative_tokens":{num_speculative_tokens},"draft_sample_method":"probabilistic","attention_backend":"B12X_MLA_SPARSE"}}'
+      --speculative-config '{{"method":"dspark","num_speculative_tokens":{num_speculative_tokens},"draft_sample_method":"probabilistic","attention_backend":"B12X"}}'
