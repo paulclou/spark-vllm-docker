@@ -19,3 +19,6 @@ benchmark-plots
 backup-wheels
 .codex
 wheels
+
+# git worktrees for parallel branches
+.worktrees/
