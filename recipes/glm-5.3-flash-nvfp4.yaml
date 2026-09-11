@@ -36,10 +36,10 @@ cluster_only: true
 
 mods:
   - mods/fix-glm53-topk-sm120
-  # vLLM #54150 (open): fused NvFp4 MoE drops w3's per-expert global scale
-  # when it differs from w1's -> U+FFFD garble. Patches the ModelOpt loader
-  # path this checkpoint uses; exact no-op for experts whose scales match.
-  - mods/fix-nvfp4-moe-global-scale
+  # mods/fix-nvfp4-moe-global-scale (vLLM #54150) is deliberately NOT applied:
+  # NVIDIA's checkpoint has identical gate/up per-expert global scales
+  # (measured 2026-09-11, 864/864 pairs across 3 layers), so the bug cannot
+  # trigger. Re-add it if the checkpoint ever changes.
   # kpool tail slot-map clamp (silent corruption on generations >~2K tokens,
   # mechanism credited to vcruz305) + XGrammar termination backports.
   # Vendored from Mia's overlay; exonerated of side effects by the KV A/B.
