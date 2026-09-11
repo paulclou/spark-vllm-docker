@@ -11,6 +11,13 @@
 #   --gpu-memory-utilization 0.85 (NVIDIA 0.90) - vLLM default exceeds UMA
 #     free memory; engine refuses to start.
 #   --moe-backend marlin - sm_121 auto-select emits silent garbage.
+#   --linear-backend marlin - this checkpoint also quantizes the dense MLPs
+#     of layers 0-2; the auto-selected FlashInfer CUTLASS NVFP4 GEMM for
+#     them exhausts unified memory in the profiling pass (4/4 boots died,
+#     2026-09-11). Marlin boots and profiles at 58.6 GiB.
+#   NVIDIA's --model-loader-extra-config multithread loader is NOT carried:
+#     its staging buffers come out of the same 121 GiB as the GPU (driver
+#     OOM mid-load with 128 threads); the default loader takes ~6.5 min.
 #   HF_HUB_OFFLINE=1 - our equivalent of NVIDIA's local /checkpoint path;
 #     Glm5NextProcessor needs local-path resolution.
 #   mods/fix-glm53-topk-sm120 - >32K requests crash without it (issue #27).
@@ -22,8 +29,10 @@
 #     The checkpoint ships one MTP layer: method "mtp" is the commercial
 #     fallback). --max-model-len 1048576 explicit, --enable-prefix-caching
 #     stated, clear_thinking=true, served-model-name alias.
-# 2026-09-11: NOT booted yet - first launch foreground, then the benchmark
-# suite in docs/GLM53_FLASH.md against the 2026-08-30 LibertAIDAI table.
+# Deployment note: the vllm@ unit's drop-in appends --host 127.0.0.1 (tailscale
+# serve owns the tailnet :8000); a foreground launch must pass it too.
+# Booted 2026-09-11 (foreground, 16.5 min to healthy); measurements in
+# docs/GLM53_FLASH.md ("NVIDIA official setup port").
 
 recipe_version: "1"
 name: GLM-5.3-Flash-NVFP4
@@ -54,7 +63,6 @@ defaults:
   max_model_len: 1048576
   max_num_seqs: 32
   max_num_batched_tokens: 8192
-  loader_threads: 128
 
 env:
   VLLM_ENGINE_READY_TIMEOUT_S: "3600"
@@ -75,12 +83,12 @@ command: |
       --enable-ep-weight-filter \
       --reasoning-parser glm45 \
       --kv-cache-dtype fp8 \
-      --model-loader-extra-config '{{"enable_multithread_load": true, "num_threads": {loader_threads}}}' \
       --max-num-batched-tokens {max_num_batched_tokens} \
       --enable-chunked-prefill \
       --max-num-seqs {max_num_seqs} \
       --gpu-memory-utilization {gpu_memory_utilization} \
       --moe-backend marlin \
+      --linear-backend marlin \
       --max-model-len {max_model_len} \
       --enable-prefix-caching \
       --tool-call-parser glm47 \
