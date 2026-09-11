@@ -104,7 +104,7 @@ boot: 6,679,972 tokens (6.37x at 1M).
 
 Quality gates re-run on the patched build the same day (same protocol as
 2026-08-31, head-node localhost over plain HTTP, results under
-`~/quality-gates-20260907/` on the head):
+`~/logs/quality-gates-20260907/` on the head; all measured outputs live under `~/logs/` since 2026-09-11):
 
 | Gate | 2026-08-31 unpatched | 2026-09-07 patched |
 | --- | --- | --- |
