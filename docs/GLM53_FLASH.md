@@ -554,7 +554,7 @@ thing to A/B back in if the benchmark shows a long-context regression.
 Not in NVIDIA's command, retained: `HF_HUB_OFFLINE=1` (our equivalent of
 the card's local `/checkpoint` path; boot-mandatory for the processor),
 `--moe-backend marlin` (sm_121 auto-select is silent garbage; the card ran
-on sm_100 where auto-select picks a working FlashInfer kernel), the three
+on sm_100 where auto-select picks a working FlashInfer kernel), two GB10
 mods (see below), `--max-model-len 1048576`, `--enable-prefix-caching`,
 glm47 tool parser + auto tool choice (the card's SGLang section names
 glm47; vLLM's `--enable-auto-tool-choice` requires a parser), DFlash2 k=7
@@ -568,14 +568,17 @@ Mods, are they still needed on NVIDIA's checkpoint:
 - `fix-glm53-topk-sm120`: yes. GB10 kernel-launch limit in the sparse
   attention indexer, independent of checkpoint; >32K prompts crash
   without it. The official arm64 image has the same gap.
-- `fix-nvfp4-moe-global-scale`: vLLM #54150 is still open upstream
-  (checked 2026-09-11), so the mod is the only fix. Whether NVIDIA's
-  checkpoint triggers the bug depends on its gate/up per-expert scales;
-  the quant summary shows a fused `gate_up_proj_weight_quantizers.N` per
-  expert, which would make them equal by construction. A range-read
-  sample of `weight_scale_2` over layers 5/20/40 was started to confirm;
-  result recorded below when in. The mod is an exact no-op for experts
-  whose scales already match, so it stays either way.
+- `fix-nvfp4-moe-global-scale`: NOT applied to this recipe. vLLM #54150
+  is still open upstream (main's `modelopt.py` still only warns, checked
+  2026-09-11), so the mod remains the only fix for affected checkpoints -
+  but NVIDIA's is not one. Measured 2026-09-11 by HTTP range-reading
+  `weight_scale_2` (F32 scalars) for every expert of layers 5, 20 and 40:
+  288/288 gate==up in each layer, ratio max 1.000 (LibertAIDAI/orcarouter:
+  31.5% equal, max 9.96). Consistent with the quant summary's single fused
+  `gate_up_proj_weight_quantizers.N` per expert, so equality holds by
+  construction for every layer, including the MTP layer 45. The mod would
+  be an exact no-op; it is left out to keep the recipe at the official
+  baseline plus GB10 fixes only. Re-add if the checkpoint changes.
 - `mia-backports-20260830`: yes. Both are image-level bugs (kpool tail
   slot map; XGrammar termination under speculative batches) present at
   this vLLM commit in the official image too.
