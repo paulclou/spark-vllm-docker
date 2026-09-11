@@ -632,14 +632,46 @@ size"), so the dropped `--block-size 2304` was never a deviation; the
 attention backend chosen is `FLASHINFER_MLA_SPARSE_SM90`; the XGrammar
 backport reported `patched` (this image predates the upstream fixes).
 
-Validation status: booted; the documented protocol is running as
-`~/logs/glm53-nvidia-20260911/bench-campaign.sh` on the head (results in
-that directory). Gates in order: assert-window (passed: no auto-fit
-reduction, 1,048,576 advertised), quality-probe text + vision, refusal
-probe (stock checkpoint: expect refusals on the sensitive tier),
-llama-benchy pp2048/tg128 x3, GSM8K 200q, RULER 8K/64K/131K, spec-decode
-acceptance from /metrics, BFCL single_turn. Remaining pre-switch checks
-from the plan: boot log free of EP/loader errors, `message.reasoning` populated under glm45,
+### Measured results - 4x Spark TP=4 + EP (2026-09-11, foreground boot)
+
+The documented protocol ran back to back as
+`~/logs/glm53-nvidia-20260911/bench-campaign.sh` on the head (13:26-16:37
+CDT, localhost, plain HTTP; every output file is in that directory). Same
+invocations as the 2026-09-07 quality-gates run, plus `tools/quality-probe.py`
+(its 3 vision probes are the MM smoke) and `tools/refusal-probe.py`.
+
+| Gate | NVIDIA NVFP4 (this recipe) | LibertAIDAI/orcarouter baseline |
+| --- | --- | --- |
+| assert-window | clean; 1,048,576 advertised | clean |
+| KV pool | 5,829,831 tokens (5.56x at 1M) | 6,623,574 (6.32x; 16 seats, no EP) |
+| quality-probe text (13 graded) | 13/13 | not run before |
+| quality-probe vision (number / colour / shape) | 3/3 | not run before |
+| Refusal benign / sensitive (mild tier) | 0/8 / 0/8 | 0/8 / 0/8 (uncensored) |
+| llama-benchy pp2048 (3 runs) | 1904 +/- 120 tok/s | 2196 +/- 54 (09-07), 1674 +/- 74 (08-31) |
+| llama-benchy tg128 (3 runs) | 46.7 +/- 12.4 (45.9 / 62.2 / 32.0) | 54.9 +/- 0.8 (09-07), 56.0 +/- 7.3 (08-31) |
+| GSM8K 200q 5-shot (flex / strict) | 96.0 / 96.0 % (+/-1.4) | 94.5 / 94.5 (09-07) |
+| RULER 8K (s2 / mk1 / vt), 25 each | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| RULER 64K | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| RULER 131K | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| DFlash2 accepted tokens per draft (metrics, whole campaign) | 4.04 (46,495 / 11,503 drafts; 57.7% of drafted) | 3.4 (09-07) |
+| BFCL v4 non-live / live (`THREADS=32 tools/bfcl-bench.sh glm-5.3-flash-nvfp4 single_turn`, bfcl-eval 2026.3.23) | 88.12 / 79.87 % | 88.00 / 79.60 (uncensored, 09-06) |
+
+Reading: every quality gate is at or above the baseline, and the DFlash2
+drafter accepts more against NVIDIA's quant (4.04/draft vs 3.4) - expected,
+since the drafter was trained against the stock model and orcarouter is
+abliterated. The refusal probe's sensitive tier is mild enough that this
+stock checkpoint also complies 8/8, so that probe does not separate stock
+from uncensored; the "~90% stock" figure in the protocol notes came from a
+harder set. Decode is the one number without a verdict: three runs spread
+32-62 tok/s, the GB10 decode noise `docs/BENCHMARKING.md` already documents
+(CV ~13%, use 15+ runs and `--tg 256 --exact-tg` for an A/B). Prefill lands
+between the two prior measurements. The KV pool is 12% smaller (32 seats +
+EP activation reservations); still 5.5 concurrent 1M contexts.
+
+Not yet done after this campaign: a proper decode A/B (15+ runs) and the
+EP-vs-TP speed comparison (drop the two EP flags, same protocol) - EP was
+adopted for card fidelity, not measured benefit. The remaining pre-switch
+checks from the plan: boot log free of EP/loader errors, `message.reasoning` populated under glm45,
 glm47 tool call structured, 72K needle, the U+FFFD scan from the
 global-scale mod section, and llama-benchy pp2048/tg128 against the
 serve-config table (EP changes the MoE communication pattern, so decode may
