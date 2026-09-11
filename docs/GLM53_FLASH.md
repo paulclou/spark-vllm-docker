@@ -470,16 +470,36 @@ Calibrated on CNN DailyMail + Nemotron-Post-Training-v2. 204 GB on disk
 (no remote code in the repo), `num_nextn_predict_layers: 1` (one MTP layer
 shipped), `transformers_version 5.16.1`. Card requires
 `transformers>=5.16.1`; the `vllm-node-glm5.3-flash` image carries 5.15.1
-- unverified whether vLLM needs the pin (vLLM has its own glm5_next model
-code; the pin most likely guards HF-side config/processor classes). Card
+- verified NOT to matter (2026-09-11): vLLM ships its own `Glm5NextConfig`
+(`transformers_utils/configs/glm5_next.py`) and `get_config()` on the
+staged NVIDIA snapshot returns it with `quant_method modelopt`, with and
+without `trust_remote_code`, in both this image and the official arm64
+image. Plain `transformers.AutoConfig` does fail (`glm5_next` unknown to
+5.15.1), which is what the card's pin is about. Card
 accuracy vs bf16 (temp 1.0, top_p 0.95): GPQA-D 0.9211/0.9217, SciCode
 0.5769/0.5621, MMMU-Pro 0.763/0.7688, AA-LCR 0.7106/0.71, IFBench
 0.6054/0.613, Terminal Bench 2.1 0.8315/0.8258. Tested hardware: one GB200
 node, TP=4, DP=1.
 
 The serve recipe now uses this checkpoint (owner decision, 2026-09-11) and
-NVIDIA's serving setup. It is NOT in any node's HF cache yet; `--setup`
-or a manual `hf download` per node precedes the first boot. Both
+NVIDIA's serving setup, matching the card's command wherever GB10 allows
+(owner direction: prefer the official recipe, then validate with the
+benchmark suite). Weights are NOT in any node's HF cache yet (the JSON
+files are staged on the head, snapshot `09b04e5e`); a per-node download
+precedes the first boot.
+
+On the image: `vllm-node-glm5.3-flash` (tonyd2wild sm121-v11-dflash2) is
+the official `vllm/vllm-openai:glm53-flash-arm64-cu130` image (also present
+on the head) plus a patch layer, verified from `docker history` and
+`pip list`: same vLLM `0.1.dev20051+g487ecf187`, torch 2.13.0+cu130,
+transformers 5.15.1, xgrammar 0.2.3, CUDA arch list sm_80..sm_120; the
+delta is flashinfer 0.6.18.dev20260819 (official: 0.6.17), the DFlash2
+speculator package, `qwen3_dflash2.py`, and patches
+`patch_registry_and_select`, `patch_glm_aux_capture`, `patch_kv_page_lcm2`,
+`patch_glm5_drafter_group`, `patch_v7`, `patch_v8_fp8`. So the image is
+not a fork of a different vLLM; it is the official arm64 build with DFlash2
+bolted on. NVIDIA's x86 GB200 path is the only thing that cannot run here
+(aarch64). Both
 checkpoints are ModelOpt quants (LibertAIDAI v0.45, NVIDIA v0.47) with
 per-expert `experts.N.{gate,up,down}_proj.weight` + `weight_scale` +
 `weight_scale_2` tensors, so the loader path, the EP weight filter, and
@@ -510,33 +530,60 @@ Flag-by-flag disposition (image `vllm-node-glm5.3-flash`, vLLM
 | NVIDIA flag | Recipe | Why |
 | --- | --- | --- |
 | `--tensor-parallel-size 4` | same | 4 x 1-GPU Sparks instead of 4 GPUs in one GB200; wiring by launch-cluster.sh |
-| `--data-parallel-size 1` | omitted | vLLM default |
+| `--data-parallel-size 1` | stated (`data_parallel`) | matches the card |
 | `--enable-expert-parallel` | adopted | New here. Experts sharded across the 4 ranks instead of column-split. `modelopt.py` `ModelOptNvFp4FusedMoE` passes `layer.expert_map` to the kernel and `experts/marlin_moe.py` (our forced `--moe-backend marlin`) honors `expert_map`/`global_num_experts`. With DP=1 no all2all backend engages (`ParallelConfig.use_all2all` is False), so MoE traffic stays on the existing NCCL TP group. Correctness/perf on GB10 unmeasured. |
 | `--enable-ep-weight-filter` | adopted | `default_loader.py` `_init_ep_weight_filter` skips non-local expert tensors at read time; LibertAIDAI's per-expert layout qualifies. Should cut per-node load I/O ~4x. Unmeasured. |
 | `--reasoning-parser glm45` | adopted (was deepseek_r1) | In this image `glm45` and `glm47` both resolve to `Glm47MoeParserReasoningAdapter` (parser-engine adapter, not the legacy parser the LibertAI card calls a landmine). The 2026-08-28 bench campaign ran glm45 on this image with content present. Re-verify `message.reasoning` on first boot. |
 | `--kv-cache-dtype fp8` | same | |
-| `--model-loader-extra-config enable_multithread_load` | adopted, `num_threads` 16 | Present in `default_loader.py`. NVIDIA's 128 threads target a GB200 host; GB10 has 20 cores. Recipe default `loader_threads`. |
+| `--model-loader-extra-config enable_multithread_load` | adopted, `num_threads` 128 | Present in `default_loader.py`. Matched to the card; threads are I/O-bound, so 128 on 20 cores is over-subscription, not a fault. Recipe default `loader_threads`; watch host memory during load on first boot (UMA). |
 | `--max-num-batched-tokens 8192` | same | |
 | `--enable-chunked-prefill` | stated | vLLM default; stated like NVIDIA does |
-| `--max-num-seqs 32` | 16 | owner-approved fleet seat cap (2026-08-30); 1M window per seat |
+| `--max-num-seqs 32` | 32 | matched to the card (2026-09-11); the 2026-08-30 fleet cap of 16 is superseded for this recipe |
 | `--gpu-memory-utilization 0.90` | 0.85 | GB10 boot-mandatory (UMA headroom), see above |
 
-Not in NVIDIA's command, retained from the validated 2026-08-30 config:
-`--trust-remote-code` (NVIDIA's repo has no remote code, so likely a no-op
-here; kept because LibertAIDAI refused to load without it on this image)
-and `HF_HUB_OFFLINE=1` (boot-mandatory), `--moe-backend marlin` (sm_121
-auto-select is silent garbage), the three mods,
-`--block-size 2304`, `--max-model-len 1048576`, `--enable-prefix-caching`,
-glm47 tool parser + auto tool choice, DFlash2 k=7 (NVIDIA ships no drafter;
-the DFlash2 drafter is dense, so EP does not touch it), `clear_thinking`,
-and the `glm-5.3-flash-nvfp4` alias.
+Dropped to match the card (2026-09-11): `--trust-remote-code` (NVIDIA's
+repo has no `auto_map`; vLLM's own config class loads it, verified above)
+and `--block-size 2304`. On block size: the 2026-08-30 note claimed the
+default is 16; it is not. `CacheConfig.block_size` defaults to None and
+resolves to the attention backend's kernel block size - the SM120 sparse
+MLA backend (`FLASHINFER_MLA_SPARSE_SM120`) supports [64, 256] - so the
+card's command runs on a backend-chosen block. 2304 (9 x 256) was a
+measured prefill win (best 72K needle, 36.6s vs 42s) and is the first
+thing to A/B back in if the benchmark shows a long-context regression.
+
+Not in NVIDIA's command, retained: `HF_HUB_OFFLINE=1` (our equivalent of
+the card's local `/checkpoint` path; boot-mandatory for the processor),
+`--moe-backend marlin` (sm_121 auto-select is silent garbage; the card ran
+on sm_100 where auto-select picks a working FlashInfer kernel), the three
+mods (see below), `--max-model-len 1048576`, `--enable-prefix-caching`,
+glm47 tool parser + auto tool choice (the card's SGLang section names
+glm47; vLLM's `--enable-auto-tool-choice` requires a parser), DFlash2 k=7
+(owner choice; NVIDIA's command has no speculation, but the checkpoint
+ships its MTP layer - 889 `layers.45` tensors - so `{"method":"mtp"}` is
+the commercial fallback; the DFlash2 drafter is dense, so EP does not touch
+it), `clear_thinking`, and the `glm-5.3-flash-nvfp4` alias.
+
+Mods, are they still needed on NVIDIA's checkpoint:
+
+- `fix-glm53-topk-sm120`: yes. GB10 kernel-launch limit in the sparse
+  attention indexer, independent of checkpoint; >32K prompts crash
+  without it. The official arm64 image has the same gap.
+- `fix-nvfp4-moe-global-scale`: vLLM #54150 is still open upstream
+  (checked 2026-09-11), so the mod is the only fix. Whether NVIDIA's
+  checkpoint triggers the bug depends on its gate/up per-expert scales;
+  the quant summary shows a fused `gate_up_proj_weight_quantizers.N` per
+  expert, which would make them equal by construction. A range-read
+  sample of `weight_scale_2` over layers 5/20/40 was started to confirm;
+  result recorded below when in. The mod is an exact no-op for experts
+  whose scales already match, so it stays either way.
+- `mia-backports-20260830`: yes. Both are image-level bugs (kpool tail
+  slot map; XGrammar termination under speculative batches) present at
+  this vLLM commit in the official image too.
 
 Validation status: dry-run only (`tests/test_recipes.sh` green). Nothing
-in this form has booted and the checkpoint is not downloaded. First launch
-must be foreground (not the systemd unit) and should re-run the smoke gates
-above before switching over: config/processor load under transformers
-5.15.1 (the card's 5.16.1 pin is the first thing that can fail), boot log
-free of EP/loader errors, `message.reasoning` populated under glm45,
+in this form has booted and the weights are not downloaded. First launch
+must be foreground (not the systemd unit) and must re-run the smoke gates
+above before switching over: boot log free of EP/loader errors, `message.reasoning` populated under glm45,
 glm47 tool call structured, 72K needle, the U+FFFD scan from the
 global-scale mod section, and llama-benchy pp2048/tg128 against the
 serve-config table (EP changes the MoE communication pattern, so decode may
