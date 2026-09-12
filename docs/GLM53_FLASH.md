@@ -704,7 +704,15 @@ the dispatch also moves only the tokens an expert needs rather than every
 token's full hidden state. None of that applies at agent-scale batch
 sizes. Recipe: TP (the measured August baseline), EP flags removed; the
 09-11 EP campaign numbers stand as the EP arm if a measured A/B is ever
-wanted (KV pool 5.94M under EP+32 seats vs 6.62M under TP+16). The remaining pre-switch
+wanted.
+
+Production restarted on the final form (TP, 16 seats) 2026-09-11 21:39 CDT
+via `vllm@glm-5.3-flash-nvfp4.service`: weights 46.01 GiB in 547 s (no EP
+filter, every rank reads all 33 shards), profiling peak 55.48 GiB, KV pool
+6,679,972 tokens (6.37x at 1M - the full pool is back: 5.94M under EP+32,
+6.62M on the August LibertAIDAI form), assert-window clean, quality-probe
+14/14 graded and byte-identical to the EP boot on all 15 probes
+(`~/logs/glm53-nvidia-20260911/quality-probe-tp16.json`). The remaining pre-switch
 checks from the plan: boot log free of EP/loader errors, `message.reasoning` populated under glm45,
 glm47 tool call structured, 72K needle, the U+FFFD scan from the
 global-scale mod section, and llama-benchy pp2048/tg128 against the
