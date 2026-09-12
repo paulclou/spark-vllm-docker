@@ -38,7 +38,7 @@ uvx llama-benchy@0.4.0 \
   --base-url https://<node>.<tailnet>.ts.net:8000/v1 --api-key "$VLLM_API_KEY" \
   --model <served-name> --tokenizer "$SNAP" \
   --pp 2048 --tg 128 --runs 3 \
-  --save-result ~/bench.json --format json
+  --save-result ~/logs/<campaign>/bench.json --format json
 ```
 
 - `--base-url` MUST include the `/v1` suffix (404 without it).
@@ -61,7 +61,7 @@ uvx --from "lm_eval[api]" --with transformers lm_eval \
   --model local-completions \
   --model_args "model=<served-name>,base_url=https://<node>.<tailnet>.ts.net:8000/v1/completions,num_concurrent=8,max_retries=3,tokenizer=$SNAP,trust_remote_code=True" \
   --tasks gsm8k --num_fewshot 5 --limit 200 \
-  --output_path ~/lm-eval-results/gsm8k
+  --output_path ~/logs/<campaign>/gsm8k
 ```
 
 RULER: `--tasks niah_single_2,niah_multikey_1,ruler_vt`, one length via

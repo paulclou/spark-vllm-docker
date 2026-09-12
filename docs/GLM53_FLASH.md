@@ -13,7 +13,8 @@ on 121 GiB nodes at TP=4:
 | --- | --- | --- | --- |
 | bf16 original | ~640 GB | ~160 GiB | impossible |
 | official FP8 | ~300 GiB | ~75 GiB | unified-memory knife-edge - avoid |
-| LibertAIDAI NVFP4 | 182 GiB | ~46 GiB | the recipe |
+| LibertAIDAI NVFP4 | 182 GiB | ~46 GiB | the recipe until 2026-09-11 (all measurements) |
+| nvidia NVFP4 (official, ModelOpt 0.47) | 204 GB | ~51 GiB | the recipe since 2026-09-11 (not yet booted) |
 
 ## Provenance
 
@@ -103,7 +104,7 @@ boot: 6,679,972 tokens (6.37x at 1M).
 
 Quality gates re-run on the patched build the same day (same protocol as
 2026-08-31, head-node localhost over plain HTTP, results under
-`~/quality-gates-20260907/` on the head):
+`~/logs/quality-gates-20260907/` on the head; all measured outputs live under `~/logs/` since 2026-09-11):
 
 | Gate | 2026-08-31 unpatched | 2026-09-07 patched |
 | --- | --- | --- |
@@ -303,9 +304,13 @@ to docs/reference-recipes/ and this became the sole launchable GLM recipe.
 The tony-flags bench config it was measured against is now
 docs/reference-recipes/glm-5.3-flash-nvfp4-bench.yaml.)
 
-Production config, built ground-up as a replication of the official vLLM
-recipe (recipes.vllm.ai GLM-5.3-Flash, GB200 NVL4 profile) with exactly
-three contract exceptions: image (tonyd2wild sm121-v11-dflash2 - official
+Production config, built ground-up (2026-08-30) as a replication of the
+official vLLM recipe (recipes.vllm.ai GLM-5.3-Flash, GB200 NVL4 profile);
+on 2026-09-11 the recipe was switched to NVIDIA's own checkpoint and
+model-card setup (see "NVIDIA official setup port" below - not yet booted
+in that form; every measurement in this section is from the 2026-08-30
+LibertAIDAI form). The 2026-08-30 form replicated the vLLM recipe with
+exactly three contract exceptions: image (tonyd2wild sm121-v11-dflash2 - official
 x86 image cannot run on aarch64), checkpoint (LibertAIDAI NVFP4 - official
 offers RedHatAI NVFP4/FP8/BF16), TP x nodes (4 x 1-GPU Sparks vs official
 8 x 2; --nnodes/--node-rank/--master-addr and NCCL/GLOO IFACE env are
@@ -452,6 +457,270 @@ this stack; probe scripts in the session scratchpad.
 Still unmeasured on the serve config: >131K prompts, DFlash2 acceptance
 under 16-seat concurrency, MM under load/large images (probes were
 smoke-grade).
+
+### NVIDIA official setup port (2026-09-11, not yet booted)
+
+NVIDIA published `nvidia/GLM-5.3-Flash-NVFP4` (MIT, 2026-09-09): ModelOpt
+v0.47.0, recipe `nvfp4_experts_dense_mlp-kv_fp8_cast` - routed experts plus
+the dense MLPs of layers 0-2 in NVFP4, FP8 KV cast; attention, shared
+experts, router, embeddings, lm_head and the vision tower stay bf16.
+Calibrated on CNN DailyMail + Nemotron-Post-Training-v2. 204 GB on disk
+(~51 GiB/node at TP=4 vs ~46 for LibertAIDAI), 33 shards. config.json:
+`Glm5NextForConditionalGeneration`, `model_type glm5_next`, no `auto_map`
+(no remote code in the repo), `num_nextn_predict_layers: 1` (one MTP layer
+shipped), `transformers_version 5.16.1`. Card requires
+`transformers>=5.16.1`; the `vllm-node-glm5.3-flash` image carries 5.15.1
+- verified NOT to matter (2026-09-11): vLLM ships its own `Glm5NextConfig`
+(`transformers_utils/configs/glm5_next.py`) and `get_config()` on the
+staged NVIDIA snapshot returns it with `quant_method modelopt`, with and
+without `trust_remote_code`, in both this image and the official arm64
+image. Plain `transformers.AutoConfig` does fail (`glm5_next` unknown to
+5.15.1), which is what the card's pin is about. Card
+accuracy vs bf16 (temp 1.0, top_p 0.95): GPQA-D 0.9211/0.9217, SciCode
+0.5769/0.5621, MMMU-Pro 0.763/0.7688, AA-LCR 0.7106/0.71, IFBench
+0.6054/0.613, Terminal Bench 2.1 0.8315/0.8258. Tested hardware: one GB200
+node, TP=4, DP=1.
+
+The serve recipe now uses this checkpoint (owner decision, 2026-09-11) and
+NVIDIA's serving setup, matching the card's command wherever GB10 allows
+(owner direction: prefer the official recipe, then validate with the
+benchmark suite). Weights are NOT in any node's HF cache yet (the JSON
+files are staged on the head, snapshot `09b04e5e`); a per-node download
+precedes the first boot.
+
+On the image: `vllm-node-glm5.3-flash` (tonyd2wild sm121-v11-dflash2) is
+the official `vllm/vllm-openai:glm53-flash-arm64-cu130` image (also present
+on the head) plus a patch layer, verified from `docker history` and
+`pip list`: same vLLM `0.1.dev20051+g487ecf187`, torch 2.13.0+cu130,
+transformers 5.15.1, xgrammar 0.2.3, CUDA arch list sm_80..sm_120; the
+delta is flashinfer 0.6.18.dev20260819 (official: 0.6.17), the DFlash2
+speculator package, `qwen3_dflash2.py`, and patches
+`patch_registry_and_select`, `patch_glm_aux_capture`, `patch_kv_page_lcm2`,
+`patch_glm5_drafter_group`, `patch_v7`, `patch_v8_fp8`. So the image is
+not a fork of a different vLLM; it is the official arm64 build with DFlash2
+bolted on. NVIDIA's x86 GB200 path is the only thing that cannot run here
+(aarch64). Both
+checkpoints are ModelOpt quants (LibertAIDAI v0.45, NVIDIA v0.47) with
+per-expert `experts.N.{gate,up,down}_proj.weight` + `weight_scale` +
+`weight_scale_2` tensors, so the loader path, the EP weight filter, and
+the global-scale mod all carry over unchanged; the mod's 68.5% mismatch
+figure was measured on LibertAIDAI/orcarouter and is unmeasured on
+NVIDIA's. NVIDIA additionally quantizes the dense MLPs of layers 0-2. The
+DFlash2 drafter was trained against the bf16 base model, so it is
+target-compatible; acceptance may shift from the LibertAIDAI figure. The
+card's vLLM command, verbatim:
+
+```
+pip install -U "transformers>=5.16.1" && \
+vllm serve /checkpoint --served-model-name nvidia/GLM-5.3-Flash-NVFP4 \
+  --host 0.0.0.0 --port 8000 --tensor-parallel-size 4 --data-parallel-size 1 \
+  --enable-expert-parallel --enable-ep-weight-filter --reasoning-parser glm45 \
+  --kv-cache-dtype fp8 \
+  --model-loader-extra-config '{"enable_multithread_load": true, "num_threads": 128}' \
+  --max-num-batched-tokens 8192 --enable-chunked-prefill --max-num-seqs 32 \
+  --gpu-memory-utilization 0.90
+```
+
+The card's SGLang command additionally names `--tool-call-parser glm47` and
+`--mem-fraction-static 0.85`, which the recipe already matches.
+
+Flag-by-flag disposition (image `vllm-node-glm5.3-flash`, vLLM
+`0.1.dev20051+g487ecf187`, inspected in the container 2026-09-11):
+
+| NVIDIA flag | Recipe | Why |
+| --- | --- | --- |
+| `--tensor-parallel-size 4` | same | 4 x 1-GPU Sparks instead of 4 GPUs in one GB200; wiring by launch-cluster.sh |
+| `--data-parallel-size 1` | stated (`data_parallel`) | matches the card |
+| `--enable-expert-parallel` | adopted for the 09-11 campaign, then dropped (owner decision, same day; see "EP vs TP" below) | New here. Experts sharded across the 4 ranks instead of column-split. `modelopt.py` `ModelOptNvFp4FusedMoE` passes `layer.expert_map` to the kernel and `experts/marlin_moe.py` (our forced `--moe-backend marlin`) honors `expert_map`/`global_num_experts`. With DP=1 no all2all backend engages (`ParallelConfig.use_all2all` is False), so MoE traffic stays on the existing NCCL TP group. Correctness/perf on GB10 unmeasured. |
+| `--enable-ep-weight-filter` | dropped with EP (it only applies under EP) | `default_loader.py` `_init_ep_weight_filter` skips non-local expert tensors at read time; LibertAIDAI's per-expert layout qualifies. Should cut per-node load I/O ~4x. Unmeasured. |
+| `--reasoning-parser glm45` | adopted (was deepseek_r1) | In this image `glm45` and `glm47` both resolve to `Glm47MoeParserReasoningAdapter` (parser-engine adapter, not the legacy parser the LibertAI card calls a landmine). The 2026-08-28 bench campaign ran glm45 on this image with content present. Re-verify `message.reasoning` on first boot. |
+| `--kv-cache-dtype fp8` | same | |
+| `--model-loader-extra-config enable_multithread_load` | adopted, `num_threads` 128 | Present in `default_loader.py`. Matched to the card; threads are I/O-bound, so 128 on 20 cores is over-subscription, not a fault. Recipe default `loader_threads`; watch host memory during load on first boot (UMA). |
+| `--max-num-batched-tokens 8192` | same | |
+| `--enable-chunked-prefill` | stated | vLLM default; stated like NVIDIA does |
+| `--max-num-seqs 32` | 16 | matched to the card for the 2026-09-11 campaign, then returned to 16 (owner decision, same day): seats are a concurrency cap, the GB10 KV pool holds ~6 full 1M contexts regardless, and 32 seats cost 12% of it |
+| `--gpu-memory-utilization 0.90` | 0.85 | GB10 boot-mandatory (UMA headroom), see above |
+
+Dropped to match the card (2026-09-11): `--trust-remote-code` (NVIDIA's
+repo has no `auto_map`; vLLM's own config class loads it, verified above)
+and `--block-size 2304`. On block size: the 2026-08-30 note claimed the
+default is 16; it is not. `CacheConfig.block_size` defaults to None and
+resolves to the attention backend's kernel block size - the SM120 sparse
+MLA backend (`FLASHINFER_MLA_SPARSE_SM120`) supports [64, 256] - so the
+card's command runs on a backend-chosen block. 2304 (9 x 256) was a
+measured prefill win (best 72K needle, 36.6s vs 42s) and is the first
+thing to A/B back in if the benchmark shows a long-context regression.
+
+Not in NVIDIA's command, retained: `HF_HUB_OFFLINE=1` (our equivalent of
+the card's local `/checkpoint` path; boot-mandatory for the processor),
+`--moe-backend marlin` (sm_121 auto-select is silent garbage; the card ran
+on sm_100 where auto-select picks a working FlashInfer kernel), two GB10
+mods (see below), `--max-model-len 1048576`, `--enable-prefix-caching`,
+glm47 tool parser + auto tool choice (the card's SGLang section names
+glm47; vLLM's `--enable-auto-tool-choice` requires a parser), DFlash2 k=7
+(owner choice; NVIDIA's command has no speculation, but the checkpoint
+ships its MTP layer - 889 `layers.45` tensors - so `{"method":"mtp"}` is
+the commercial fallback; the DFlash2 drafter is dense, so EP does not touch
+it), `clear_thinking`, and the `glm-5.3-flash-nvfp4` alias.
+
+Mods, are they still needed on NVIDIA's checkpoint:
+
+- `fix-glm53-topk-sm120`: yes. GB10 kernel-launch limit in the sparse
+  attention indexer, independent of checkpoint; >32K prompts crash
+  without it. The official arm64 image has the same gap.
+- `fix-nvfp4-moe-global-scale`: NOT applied to this recipe. vLLM #54150
+  is still open upstream (main's `modelopt.py` still only warns, checked
+  2026-09-11), so the mod remains the only fix for affected checkpoints -
+  but NVIDIA's is not one. Measured 2026-09-11, first by HTTP range-reading
+  `weight_scale_2` (F32 scalars) for every expert of layers 5, 20 and 40
+  (288/288 gate==up each), then over the full local weights after the
+  download: 12,096/12,096 pairs identical across all 42 MoE layers, max
+  ratio 1.000000 (LibertAIDAI/orcarouter: 31.5% equal, max 9.96). The live
+  boot log carries no `w1_weight_scale_2 must match w3_weight_scale_2`
+  warning, which vLLM prints whenever the loader sees a mismatch. Consistent with the quant summary's single fused
+  `gate_up_proj_weight_quantizers.N` per expert, so equality holds by
+  construction for every layer, including the MTP layer 45. The mod would
+  be an exact no-op; it is left out to keep the recipe at the official
+  baseline plus GB10 fixes only. Re-add if the checkpoint changes.
+- `mia-backports-20260830`: yes. Both are image-level bugs (kpool tail
+  slot map; XGrammar termination under speculative batches) present at
+  this vLLM commit in the official image too.
+
+### First boot and the two GB10 fixes (2026-09-11)
+
+Weights were distributed with `./hf-download.sh nvidia/GLM-5.3-Flash-NVFP4
+-c` (head pulls, sequential rsync to the copy hosts; 191 GB, 33 shards,
+snapshot `09b04e5e` on all four nodes). Seven foreground launches on the
+head (`run-recipe.sh ... --host 127.0.0.1`; the loopback host is what the
+`vllm@` drop-in adds because `tailscale serve` owns the tailnet :8000, and
+attempt 1 died on the wildcard bind without it). Attempts 2-5 all died in
+vLLM's memory-profiling pass with the NVIDIA driver logging
+`NV_ERR_NO_MEMORY` or the kernel OOM-killer taking the worker (its host
+RSS under 4 GB, so the exhaustion was unified GPU memory). Bisected one
+variable per boot, variants generated by path the way
+`tools/bench-campaign.sh` does:
+
+| Attempt | EP | seats | loader | dense NVFP4 GEMM | result |
+| --- | --- | --- | --- | --- | --- |
+| 2 | on | 32 | 128 threads | FlashInfer CUTLASS (auto) | driver OOM in profiling |
+| 3 | off | 32 | 128 threads | FlashInfer CUTLASS (auto) | kernel OOM in profiling |
+| 4 | on | 16 | 128 threads | FlashInfer CUTLASS (auto) | driver OOM mid-load, died in profiling |
+| 5 | on | 32 | default | FlashInfer CUTLASS (auto) | kernel OOM in profiling |
+| 7 | on | 32 | default | **Marlin** (`--linear-backend marlin`) | healthy in 16.5 min |
+
+The effective engine config of attempt 5 diffed against the production
+boot's journal line differs in exactly one non-bisected field:
+`quantization=modelopt_fp4` vs `compressed-tensors`. NVIDIA's checkpoint
+quantizes the dense MLPs of layers 0-2 (LibertAIDAI/orcarouter keep them
+bf16), and every failed boot logged `Using FlashInferCutlassNvFp4LinearKernel
+for NVFP4 GEMM` - a kernel family the recipe already forces away from for
+the MoE on sm_121 - while production never had a dense NVFP4 GEMM at all.
+`--linear-backend marlin` (the same knob eugr's b12x GLM recipe sets to
+`b12x`) is therefore GB10-mandatory for this checkpoint; the boot then
+reports "Actual usage is 58.57 GiB" for weights + profiling (production:
+55.86) and a KV pool of 5,829,831 tokens (5.56x at 1M; production
+6,623,574 with 16 seats and no EP).
+
+NVIDIA's 128-thread `enable_multithread_load` is dropped for good as well:
+attempt 4 showed the driver refusing allocations while shards were still
+streaming in. On a GB200 the loader's staging buffers live in host RAM the
+GPU never sees; on GB10 they come out of the same 121 GiB. The default
+loader with the EP weight filter takes ~6.5 min (391 s). If load time
+ever matters, the repo-native option is `--load-format instanttensor` (in
+this image, used by the glm-5.2 recipe), not a thread count. Not tested.
+
+Other facts from the boot logs: vLLM sets the attention block size to
+2304 on its own ("to ensure that attention page size is >= mamba page
+size"), so the dropped `--block-size 2304` was never a deviation; the
+attention backend chosen is `FLASHINFER_MLA_SPARSE_SM90`; the XGrammar
+backport reported `patched` (this image predates the upstream fixes).
+
+### Measured results - 4x Spark TP=4 + EP (2026-09-11, foreground boot)
+
+The documented protocol ran back to back as
+`~/logs/glm53-nvidia-20260911/bench-campaign.sh` on the head (13:26-16:37
+CDT, localhost, plain HTTP; every output file is in that directory). Same
+invocations as the 2026-09-07 quality-gates run, plus `tools/quality-probe.py`
+(its 3 vision probes are the MM smoke) and `tools/refusal-probe.py`.
+
+| Gate | NVIDIA NVFP4 (this recipe) | LibertAIDAI/orcarouter baseline |
+| --- | --- | --- |
+| assert-window | clean; 1,048,576 advertised | clean |
+| KV pool | 5,829,831 tokens (5.56x at 1M) | 6,623,574 (6.32x; 16 seats, no EP) |
+| quality-probe text (13 graded) | 13/13 | not run before |
+| quality-probe vision (number / colour / shape) | 3/3 | not run before |
+| Refusal benign / sensitive (mild tier) | 0/8 / 0/8 | 0/8 / 0/8 (uncensored) |
+| llama-benchy pp2048 (3 runs) | 1904 +/- 120 tok/s | 2196 +/- 54 (09-07), 1674 +/- 74 (08-31) |
+| llama-benchy tg128 (3 runs) | 46.7 +/- 12.4 (45.9 / 62.2 / 32.0) | 54.9 +/- 0.8 (09-07), 56.0 +/- 7.3 (08-31) |
+| GSM8K 200q 5-shot (flex / strict) | 96.0 / 96.0 % (+/-1.4) | 94.5 / 94.5 (09-07) |
+| RULER 8K (s2 / mk1 / vt), 25 each | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| RULER 64K | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| RULER 131K | 1.0 / 1.0 / 1.0 | 1.0 / 1.0 / 1.0 |
+| DFlash2 accepted tokens per draft (metrics, whole campaign) | 4.04 (46,495 / 11,503 drafts; 57.7% of drafted) | 3.4 (09-07) |
+| BFCL v4 non-live / live (`THREADS=32 tools/bfcl-bench.sh glm-5.3-flash-nvfp4 single_turn`, bfcl-eval 2026.3.23) | 88.12 / 79.87 % | 88.00 / 79.60 (uncensored, 09-06) |
+
+Reading: every quality gate is at or above the baseline, and the DFlash2
+drafter accepts more against NVIDIA's quant (4.04/draft vs 3.4) - expected,
+since the drafter was trained against the stock model and orcarouter is
+abliterated. The refusal probe's sensitive tier is mild enough that this
+stock checkpoint also complies 8/8, so that probe does not separate stock
+from uncensored; the "~90% stock" figure in the protocol notes came from a
+harder set. Decode is the one number without a verdict: three runs spread
+32-62 tok/s, the GB10 decode noise `docs/BENCHMARKING.md` already documents
+(CV ~13%, use 15+ runs and `--tg 256 --exact-tg` for an A/B). Prefill lands
+between the two prior measurements. The KV pool is 12% smaller (32 seats +
+EP activation reservations); still 5.5 concurrent 1M contexts.
+
+Not yet done after this campaign: a proper decode A/B (15+ runs). The
+EP-vs-TP question was settled on theory the same day (below); the measured
+comparison remains open if anyone wants the number.
+
+### EP vs TP on 4 Sparks (2026-09-11, decision: TP)
+
+NVIDIA's command uses expert parallelism because its target is a GB200
+node serving many concurrent users over NVLink. The literature and vLLM's
+own guidance split the two regimes cleanly:
+
+- Low concurrency favors TP: "in single-batch, multi-device settings the
+  load imbalance introduced by expert parallelism outweighs the
+  communication cost of tensor parallelism"
+  (https://arxiv.org/pdf/2505.03531). One token picks 8 of 288 experts;
+  under EP those land unevenly over 4 nodes and every step waits for the
+  busiest one, while TP splits every expert evenly.
+- High concurrency favors EP (with DP): vLLM's parallelism guide -
+  latency-focused, low-concurrency deployments use TP; throughput-focused
+  ones use DP+EP for MoE
+  (https://docs.vllm.ai/en/stable/serving/parallelism_scaling/).
+- Communication is a wash: TP all-reduce up to 30% of latency, EP
+  all-to-all 10-30% and worst for decode-sized messages
+  (https://arxiv.org/pdf/2512.13525, https://arxiv.org/pdf/2606.26607).
+- TP keeps all devices busy; EP/PP leave devices idle at small batch
+  (https://arxiv.org/pdf/2508.17467).
+
+Why EP wins at high concurrency: with many tokens in flight every expert
+on every node has work each step, so the imbalance averages out and each
+expert runs as one full-size GEMM instead of four quarter-width slices;
+the dispatch also moves only the tokens an expert needs rather than every
+token's full hidden state. None of that applies at agent-scale batch
+sizes. Recipe: TP (the measured August baseline), EP flags removed; the
+09-11 EP campaign numbers stand as the EP arm if a measured A/B is ever
+wanted.
+
+Production restarted on the final form (TP, 16 seats) 2026-09-11 21:39 CDT
+via `vllm@glm-5.3-flash-nvfp4.service`: weights 46.01 GiB in 547 s (no EP
+filter, every rank reads all 33 shards), profiling peak 55.48 GiB, KV pool
+6,679,972 tokens (6.37x at 1M - the full pool is back: 5.94M under EP+32,
+6.62M on the August LibertAIDAI form), assert-window clean, quality-probe
+14/14 graded and byte-identical to the EP boot on all 15 probes
+(`~/logs/glm53-nvidia-20260911/quality-probe-tp16.json`). The remaining pre-switch
+checks from the plan: boot log free of EP/loader errors, `message.reasoning` populated under glm45,
+glm47 tool call structured, 72K needle, the U+FFFD scan from the
+global-scale mod section, and llama-benchy pp2048/tg128 against the
+serve-config table (EP changes the MoE communication pattern, so decode may
+move either way). If EP misbehaves, drop the two EP flags first; if glm45
+discards replies, revert to deepseek_r1 - both single-line changes, neither
+undoes the rest of the port. The uncensored recipe is deliberately NOT
+ported (owner decision, 2026-09-11) and stays on the 2026-08-31 form.
 
 ## The Uncensored variant (recipes/glm-5.3-flash-uncensored-nvfp4.yaml, 2026-08-31)
 
