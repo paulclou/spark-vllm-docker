@@ -10,6 +10,8 @@
 # GB10-forced deviations from NVIDIA's values (not tuning):
 #   --gpu-memory-utilization 0.85 (NVIDIA 0.90) - vLLM default exceeds UMA
 #     free memory; engine refuses to start.
+#   --max-num-seqs 16 (NVIDIA 32) - concurrency cap sized to 121 GiB UMA and
+#     a handful of agent streams; 32 cost 12% of the KV pool (owner, 09-11).
 #   --moe-backend marlin - sm_121 auto-select emits silent garbage.
 #   --linear-backend marlin - this checkpoint also quantizes the dense MLPs
 #     of layers 0-2; the auto-selected FlashInfer CUTLASS NVFP4 GEMM for
@@ -61,7 +63,7 @@ defaults:
   data_parallel: 1
   gpu_memory_utilization: 0.85
   max_model_len: 1048576
-  max_num_seqs: 32
+  max_num_seqs: 16
   max_num_batched_tokens: 8192
 
 env:

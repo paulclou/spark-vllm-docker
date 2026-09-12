@@ -538,7 +538,7 @@ Flag-by-flag disposition (image `vllm-node-glm5.3-flash`, vLLM
 | `--model-loader-extra-config enable_multithread_load` | adopted, `num_threads` 128 | Present in `default_loader.py`. Matched to the card; threads are I/O-bound, so 128 on 20 cores is over-subscription, not a fault. Recipe default `loader_threads`; watch host memory during load on first boot (UMA). |
 | `--max-num-batched-tokens 8192` | same | |
 | `--enable-chunked-prefill` | stated | vLLM default; stated like NVIDIA does |
-| `--max-num-seqs 32` | 32 | matched to the card (2026-09-11); the 2026-08-30 fleet cap of 16 is superseded for this recipe |
+| `--max-num-seqs 32` | 16 | matched to the card for the 2026-09-11 campaign, then returned to 16 (owner decision, same day): seats are a concurrency cap, the GB10 KV pool holds ~6 full 1M contexts regardless, and 32 seats cost 12% of it |
 | `--gpu-memory-utilization 0.90` | 0.85 | GB10 boot-mandatory (UMA headroom), see above |
 
 Dropped to match the card (2026-09-11): `--trust-remote-code` (NVIDIA's
