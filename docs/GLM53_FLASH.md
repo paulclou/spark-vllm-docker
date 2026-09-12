@@ -531,8 +531,8 @@ Flag-by-flag disposition (image `vllm-node-glm5.3-flash`, vLLM
 | --- | --- | --- |
 | `--tensor-parallel-size 4` | same | 4 x 1-GPU Sparks instead of 4 GPUs in one GB200; wiring by launch-cluster.sh |
 | `--data-parallel-size 1` | stated (`data_parallel`) | matches the card |
-| `--enable-expert-parallel` | adopted | New here. Experts sharded across the 4 ranks instead of column-split. `modelopt.py` `ModelOptNvFp4FusedMoE` passes `layer.expert_map` to the kernel and `experts/marlin_moe.py` (our forced `--moe-backend marlin`) honors `expert_map`/`global_num_experts`. With DP=1 no all2all backend engages (`ParallelConfig.use_all2all` is False), so MoE traffic stays on the existing NCCL TP group. Correctness/perf on GB10 unmeasured. |
-| `--enable-ep-weight-filter` | adopted | `default_loader.py` `_init_ep_weight_filter` skips non-local expert tensors at read time; LibertAIDAI's per-expert layout qualifies. Should cut per-node load I/O ~4x. Unmeasured. |
+| `--enable-expert-parallel` | adopted for the 09-11 campaign, then dropped (owner decision, same day; see "EP vs TP" below) | New here. Experts sharded across the 4 ranks instead of column-split. `modelopt.py` `ModelOptNvFp4FusedMoE` passes `layer.expert_map` to the kernel and `experts/marlin_moe.py` (our forced `--moe-backend marlin`) honors `expert_map`/`global_num_experts`. With DP=1 no all2all backend engages (`ParallelConfig.use_all2all` is False), so MoE traffic stays on the existing NCCL TP group. Correctness/perf on GB10 unmeasured. |
+| `--enable-ep-weight-filter` | dropped with EP (it only applies under EP) | `default_loader.py` `_init_ep_weight_filter` skips non-local expert tensors at read time; LibertAIDAI's per-expert layout qualifies. Should cut per-node load I/O ~4x. Unmeasured. |
 | `--reasoning-parser glm45` | adopted (was deepseek_r1) | In this image `glm45` and `glm47` both resolve to `Glm47MoeParserReasoningAdapter` (parser-engine adapter, not the legacy parser the LibertAI card calls a landmine). The 2026-08-28 bench campaign ran glm45 on this image with content present. Re-verify `message.reasoning` on first boot. |
 | `--kv-cache-dtype fp8` | same | |
 | `--model-loader-extra-config enable_multithread_load` | adopted, `num_threads` 128 | Present in `default_loader.py`. Matched to the card; threads are I/O-bound, so 128 on 20 cores is over-subscription, not a fault. Recipe default `loader_threads`; watch host memory during load on first boot (UMA). |
@@ -671,9 +671,40 @@ harder set. Decode is the one number without a verdict: three runs spread
 between the two prior measurements. The KV pool is 12% smaller (32 seats +
 EP activation reservations); still 5.5 concurrent 1M contexts.
 
-Not yet done after this campaign: a proper decode A/B (15+ runs) and the
-EP-vs-TP speed comparison (drop the two EP flags, same protocol) - EP was
-adopted for card fidelity, not measured benefit. The remaining pre-switch
+Not yet done after this campaign: a proper decode A/B (15+ runs). The
+EP-vs-TP question was settled on theory the same day (below); the measured
+comparison remains open if anyone wants the number.
+
+### EP vs TP on 4 Sparks (2026-09-11, decision: TP)
+
+NVIDIA's command uses expert parallelism because its target is a GB200
+node serving many concurrent users over NVLink. The literature and vLLM's
+own guidance split the two regimes cleanly:
+
+- Low concurrency favors TP: "in single-batch, multi-device settings the
+  load imbalance introduced by expert parallelism outweighs the
+  communication cost of tensor parallelism"
+  (https://arxiv.org/pdf/2505.03531). One token picks 8 of 288 experts;
+  under EP those land unevenly over 4 nodes and every step waits for the
+  busiest one, while TP splits every expert evenly.
+- High concurrency favors EP (with DP): vLLM's parallelism guide -
+  latency-focused, low-concurrency deployments use TP; throughput-focused
+  ones use DP+EP for MoE
+  (https://docs.vllm.ai/en/stable/serving/parallelism_scaling/).
+- Communication is a wash: TP all-reduce up to 30% of latency, EP
+  all-to-all 10-30% and worst for decode-sized messages
+  (https://arxiv.org/pdf/2512.13525, https://arxiv.org/pdf/2606.26607).
+- TP keeps all devices busy; EP/PP leave devices idle at small batch
+  (https://arxiv.org/pdf/2508.17467).
+
+Why EP wins at high concurrency: with many tokens in flight every expert
+on every node has work each step, so the imbalance averages out and each
+expert runs as one full-size GEMM instead of four quarter-width slices;
+the dispatch also moves only the tokens an expert needs rather than every
+token's full hidden state. None of that applies at agent-scale batch
+sizes. Recipe: TP (the measured August baseline), EP flags removed; the
+09-11 EP campaign numbers stand as the EP arm if a measured A/B is ever
+wanted (KV pool 5.94M under EP+32 seats vs 6.62M under TP+16). The remaining pre-switch
 checks from the plan: boot log free of EP/loader errors, `message.reasoning` populated under glm45,
 glm47 tool call structured, 72K needle, the U+FFFD scan from the
 global-scale mod section, and llama-benchy pp2048/tg128 against the

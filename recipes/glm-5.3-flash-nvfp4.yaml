@@ -12,6 +12,11 @@
 #     free memory; engine refuses to start.
 #   --max-num-seqs 16 (NVIDIA 32) - concurrency cap sized to 121 GiB UMA and
 #     a handful of agent streams; 32 cost 12% of the KV pool (owner, 09-11).
+#   No --enable-expert-parallel / --enable-ep-weight-filter (NVIDIA: on) -
+#     EP pays off at high concurrency on NVLink; at agent-scale batch sizes
+#     on 4 CX7-linked Sparks the per-token expert imbalance outweighs TP's
+#     all-reduce (docs/GLM53_FLASH.md, "EP vs TP"). TP is the measured
+#     August baseline. EP booted and passed every gate on 09-11 if needed.
 #   --moe-backend marlin - sm_121 auto-select emits silent garbage.
 #   --linear-backend marlin - this checkpoint also quantizes the dense MLPs
 #     of layers 0-2; the auto-selected FlashInfer CUTLASS NVFP4 GEMM for
@@ -81,8 +86,6 @@ command: |
       --port {port} \
       --tensor-parallel-size {tensor_parallel} \
       --data-parallel-size {data_parallel} \
-      --enable-expert-parallel \
-      --enable-ep-weight-filter \
       --reasoning-parser glm45 \
       --kv-cache-dtype fp8 \
       --max-num-batched-tokens {max_num_batched_tokens} \
