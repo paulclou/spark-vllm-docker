@@ -47,7 +47,7 @@ mods:
   - mods/fix-glm53-topk-sm120
   # mods/fix-nvfp4-moe-global-scale (vLLM #54150) is deliberately NOT applied:
   # NVIDIA's checkpoint has identical gate/up per-expert global scales
-  # (measured 2026-09-11, 864/864 pairs across 3 layers), so the bug cannot
+  # (measured 2026-09-11: all 12,096 pairs in all 42 MoE layers), so the bug cannot
   # trigger. Re-add it if the checkpoint ever changes.
   # kpool tail slot-map clamp (silent corruption on generations >~2K tokens,
   # mechanism credited to vcruz305) + XGrammar termination backports.

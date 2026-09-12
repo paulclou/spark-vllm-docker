@@ -571,10 +571,13 @@ Mods, are they still needed on NVIDIA's checkpoint:
 - `fix-nvfp4-moe-global-scale`: NOT applied to this recipe. vLLM #54150
   is still open upstream (main's `modelopt.py` still only warns, checked
   2026-09-11), so the mod remains the only fix for affected checkpoints -
-  but NVIDIA's is not one. Measured 2026-09-11 by HTTP range-reading
-  `weight_scale_2` (F32 scalars) for every expert of layers 5, 20 and 40:
-  288/288 gate==up in each layer, ratio max 1.000 (LibertAIDAI/orcarouter:
-  31.5% equal, max 9.96). Consistent with the quant summary's single fused
+  but NVIDIA's is not one. Measured 2026-09-11, first by HTTP range-reading
+  `weight_scale_2` (F32 scalars) for every expert of layers 5, 20 and 40
+  (288/288 gate==up each), then over the full local weights after the
+  download: 12,096/12,096 pairs identical across all 42 MoE layers, max
+  ratio 1.000000 (LibertAIDAI/orcarouter: 31.5% equal, max 9.96). The live
+  boot log carries no `w1_weight_scale_2 must match w3_weight_scale_2`
+  warning, which vLLM prints whenever the loader sees a mismatch. Consistent with the quant summary's single fused
   `gate_up_proj_weight_quantizers.N` per expert, so equality holds by
   construction for every layer, including the MTP layer 45. The mod would
   be an exact no-op; it is left out to keep the recipe at the official
