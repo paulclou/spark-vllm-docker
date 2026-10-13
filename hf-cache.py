@@ -223,7 +223,9 @@ def supports_symlinks(directory):
     """Probe inside our private staging directory, without touching user files."""
     probe = directory / ".symlink-probe"
     try:
-        probe.symlink_to(".", target_is_directory=True)
+        # Call os.symlink directly: pathlib's symlink_to binds to os.symlink
+        # at import time on Python <= 3.11, which breaks monkeypatched probes.
+        os.symlink(".", probe)
     except OSError as error:
         if error.errno in (errno.EPERM, errno.EACCES, errno.EOPNOTSUPP, errno.ENOSYS):
             return False
