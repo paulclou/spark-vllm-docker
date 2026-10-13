@@ -8,9 +8,6 @@ ARG TORCH_VERSION=2.13.0
 ARG TORCHVISION_VERSION=0.28.0
 ARG TORCHAUDIO_VERSION=2.11.0
 ARG CUTLASS_DSL_VERSION=4.7.0
-ARG B12X_REPO=""
-ARG B12X_REF=""
-ARG B12X_CACHEBUST=""
 
 # Empty fallback for ordinary remote-source builds. A caller may override this
 # stage with --build-context vllm_source=/path/to/checkout.
@@ -120,8 +117,12 @@ FROM base AS flashinfer-builder
 
 ARG FLASHINFER_CUDA_ARCH_LIST="12.1a"
 ENV FLASHINFER_CUDA_ARCH_LIST=${FLASHINFER_CUDA_ARCH_LIST}
+# The provider shim accepts the same space-separated dotted architectures.
+ENV FLASHINFER_JIT_CACHE_PROVIDER_ARCHS=${FLASHINFER_CUDA_ARCH_LIST}
 WORKDIR $VLLM_BASE_DIR
+ARG FLASHINFER_REPO=https://github.com/flashinfer-ai/flashinfer.git
 ARG FLASHINFER_REF=main
+ARG FLASHINFER_BUILD_CUBIN=1
 ARG FLASHINFER_BUILD_PYTHON=/usr/bin/python3
 
 # FlashInfer's source checkout may carry a .python-version. Keep no-isolation
@@ -140,28 +141,33 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # Smart Git Clone (Fetch changes instead of full re-clone)
 RUN --mount=type=cache,id=repo-cache,target=/repo-cache \
     echo "CACHEBUST_FLASHINFER=${CACHEBUST_FLASHINFER}" && \
-    cd /repo-cache && \
+    FLASHINFER_REPO_KEY="$(printf '%s' "$FLASHINFER_REPO" | sha256sum | cut -d' ' -f1)" && \
+    mkdir -p "/repo-cache/flashinfer-$FLASHINFER_REPO_KEY" && \
+    cd "/repo-cache/flashinfer-$FLASHINFER_REPO_KEY" && \
     if [ ! -d "flashinfer" ]; then \
         echo "Cache miss: Cloning FlashInfer from scratch..." && \
-        git clone --recursive https://github.com/flashinfer-ai/flashinfer.git; \
-        if [ "$FLASHINFER_REF" != "main" ]; then \
-            cd flashinfer && \
-            git checkout ${FLASHINFER_REF}; \
-        fi; \
+        git clone --recursive "$FLASHINFER_REPO" flashinfer && \
+        cd flashinfer; \
     else \
         echo "Cache hit: Fetching flashinfer updates..." && \
         cd flashinfer && \
         git fetch origin && \
-        git fetch origin --tags --force && \
-        (git checkout --detach origin/${FLASHINFER_REF} 2>/dev/null || git checkout ${FLASHINFER_REF}) && \
-        git reset --hard HEAD && \
-        git submodule update --init --recursive && \
-        git clean -fdx && \
-        git gc --auto; \
+        git fetch origin --tags --force; \
     fi && \
-    cp -a /repo-cache/flashinfer /workspace/flashinfer
+    (git checkout --detach "origin/${FLASHINFER_REF}" 2>/dev/null || git checkout "$FLASHINFER_REF") && \
+    git reset --hard HEAD && \
+    git submodule update --init --recursive && \
+    git clean -fdx && \
+    git gc --auto && \
+    cp -a "/repo-cache/flashinfer-$FLASHINFER_REPO_KEY/flashinfer" /workspace/flashinfer
 
 WORKDIR /workspace/flashinfer
+
+ARG FLASHINFER_APPLY_REGULAR_PATCHES=0
+COPY docker/apply_patch_series.sh /tmp/apply_patch_series.sh
+COPY docker/patches/qwen3.8/flashinfer/ /tmp/regular-flashinfer/
+RUN bash /tmp/apply_patch_series.sh flashinfer "$FLASHINFER_REPO" \
+    "$FLASHINFER_APPLY_REGULAR_PATCHES" /tmp/regular-flashinfer
 
 ARG FLASHINFER_PRS=""
 
@@ -228,20 +234,28 @@ RUN set -eux; \
 
 
 
-# Apply patch to avoid re-downloading existing cubins
-COPY flashinfer_cache.patch .
+# Temporary workaround for FlashInfer's B12X loader include-order regression
+# (601cb127). Apply after requested PRs, and skip refs where it is already fixed.
+# Remove once supported refs include the upstream fix.
+COPY docker/patch_flashinfer_b12x_loader_include_order.py /tmp/patch_flashinfer_b12x_loader_include_order.py
+RUN "$FLASHINFER_BUILD_PYTHON" /tmp/patch_flashinfer_b12x_loader_include_order.py .
+
+# FlashInfer #5240 reuses checksum-verified cubins from the cache mount below.
+COPY docker/build_flashinfer_jit_providers.sh /tmp/build_flashinfer_jit_providers.sh
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     --mount=type=cache,id=ccache,target=/root/.ccache \
     --mount=type=cache,id=cubins-cache,target=/workspace/flashinfer/flashinfer-cubin/flashinfer_cubin/cubins \
-    patch -p1 < flashinfer_cache.patch && \
     # flashinfer-python
     sed -i -e 's/license = "Apache-2.0"/license = { text = "Apache-2.0" }/' -e '/license-files/d' pyproject.toml && \
     "$FLASHINFER_BUILD_PYTHON" -c 'import filelock, packaging, requests, torch, tqdm' && \
     uv build --python "$FLASHINFER_BUILD_PYTHON" --no-build-isolation --wheel . --out-dir=/workspace/wheels -v && \
-    # flashinfer-cubin
-    cd flashinfer-cubin && uv build --python "$FLASHINFER_BUILD_PYTHON" --no-build-isolation --wheel . --out-dir=/workspace/wheels -v && \
+    # The B12X fork does not need the flashinfer-cubin wheel.
+    if [ "$FLASHINFER_BUILD_CUBIN" = "1" ]; then \
+        (cd flashinfer-cubin && uv build --python "$FLASHINFER_BUILD_PYTHON" --no-build-isolation --wheel . --out-dir=/workspace/wheels -v); \
+    fi && \
     # flashinfer-jit-cache
-    cd ../flashinfer-jit-cache && \
+    bash /tmp/build_flashinfer_jit_providers.sh "$FLASHINFER_BUILD_PYTHON" /workspace/wheels && \
+    cd flashinfer-jit-cache && \
     uv build --python "$FLASHINFER_BUILD_PYTHON" --no-build-isolation --wheel . --out-dir=/workspace/wheels -v && \
     # dump git ref and target architecture in the wheels dir
     cd .. && \
@@ -265,8 +279,10 @@ ENV CARGO_HOME=/opt/cargo
 ENV PATH=/opt/cargo/bin:$PATH
 ENV PROTOC_INCLUDE=/usr/include
 
+# DeepGEMM's DeepJIT headers include elfutils/libdwfl.h (provided by libdw-dev).
 RUN apt update && \
-    apt install -y --no-install-recommends ca-certificates pkg-config protobuf-compiler libprotobuf-dev && \
+    apt install -y --no-install-recommends \
+        ca-certificates pkg-config protobuf-compiler libprotobuf-dev libdw-dev && \
     rm -rf /var/lib/apt/lists/* && \
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
       sh -s -- -y --profile minimal --default-toolchain ${RUSTUP_TOOLCHAIN} --no-modify-path && \
@@ -287,10 +303,9 @@ ARG VLLM_REF=main
 ARG VLLM_SOURCE_MODE=remote
 ARG VLLM_SOURCE_COMMIT=""
 
-# Pinned while investigating an SM121 DeepSeek-V4 MXFP4 grouped scale-factor
-# regression first observed at nv_dev f8e8fb5 (PR #384); last known good.
-ARG DEEPGEMM_REPO=https://github.com/deepseek-ai/DeepGEMM.git
-ARG DEEPGEMM_REF=a6b593d2826719dcf4892609af7b84ee23aaf32a
+# Empty overrides select DeepGEMM to match the patched vLLM source below.
+ARG DEEPGEMM_REPO=""
+ARG DEEPGEMM_REF=""
 ENV DEEPGEMM_SRC_DIR=/workspace/DeepGEMM
 
 # The upstream repository uses the shared checkout cache. Custom repositories
@@ -356,40 +371,17 @@ RUN --mount=type=cache,id=repo-cache,target=/repo-cache \
         cp -a /repo-cache/vllm "$VLLM_BASE_DIR/"; \
     fi
 
-RUN --mount=type=cache,id=repo-cache,target=/repo-cache \
-    set -eux; \
-    cd /repo-cache; \
-    if [ ! -d "deepgemm" ]; then \
-        echo "Cache miss: Cloning DeepGEMM from scratch..."; \
-        git clone --recursive "$DEEPGEMM_REPO" deepgemm; \
-    else \
-        echo "Cache hit: Fetching DeepGEMM updates..."; \
-        cd deepgemm; \
-        git fetch origin; \
-        git fetch origin --tags --force; \
-        cd ..; \
-    fi; \
-    cd deepgemm; \
-    git checkout --detach "$DEEPGEMM_REF" 2>/dev/null || git checkout --detach "origin/$DEEPGEMM_REF"; \
-    git reset --hard; \
-    git submodule update --init --recursive; \
-    git clean -fdx; \
-    rm -rf "$DEEPGEMM_SRC_DIR"; \
-    cp -a /repo-cache/deepgemm "$DEEPGEMM_SRC_DIR"
-
 WORKDIR $VLLM_BASE_DIR/vllm
 
-# Optional upstream PR patches requested by the build wrapper. PR #54788 makes
-# Model Runner V2 honor an MTP/EAGLE draft's explicit MoE backend instead of
-# inheriting the quantized target's incompatible backend. Remove it once the fix
-# is present in the oldest vLLM ref used by regular builds. PR #47392 is carried
-# as a source-aware runtime patch below because its full diff now conflicts with
-# current upstream main.
-ARG VLLM_PRESET_PRS="54788"
+ARG VLLM_PRESET_PRS=""
 ARG VLLM_APPLY_PRESET_PRS=""
 ARG VLLM_PRS=""
 ARG VLLM_PRESERVE_SM12X_TARGET=0
 ARG VLLM_PATCH_B12X_C128A_ALIGNMENT=0
+
+COPY docker/apply_patch_series.sh /tmp/apply_patch_series.sh
+COPY docker/patches/qwen3.8/vllm/ /tmp/regular-vllm/
+
 
 # Numeric PR refs are resolved from vllm-project/vllm. Full GitHub PR URLs are
 # downloaded from the named repository, preserving that PR's own base range.
@@ -397,20 +389,24 @@ ARG VLLM_PATCH_B12X_C128A_ALIGNMENT=0
 RUN set -eux; \
     VLLM_ALL_PRS=""; \
     VLLM_SELECTED_PRESET_PRS=""; \
+    VLLM_APPLY_REGULAR_PATCHES=0; \
     VLLM_REQUESTED_HEAD="$(git rev-parse HEAD)"; \
     case "$VLLM_APPLY_PRESET_PRS" in \
-        1|true|TRUE|yes|YES) VLLM_SELECTED_PRESET_PRS="$VLLM_PRESET_PRS";; \
+        1|true|TRUE|yes|YES) VLLM_SELECTED_PRESET_PRS="$VLLM_PRESET_PRS"; VLLM_APPLY_REGULAR_PATCHES=1;; \
         0|false|FALSE|no|NO) VLLM_SELECTED_PRESET_PRS="";; \
         ""|auto|AUTO) \
             if [ -z "$VLLM_PRS" ]; then \
                 if [ "$VLLM_REF" = "main" ]; then \
                     VLLM_SELECTED_PRESET_PRS="$VLLM_PRESET_PRS"; \
+                    VLLM_APPLY_REGULAR_PATCHES=1; \
                 else \
                     echo "Skipping preset vLLM PRs in auto mode because VLLM_REF=$VLLM_REF is not main."; \
                 fi; \
             fi;; \
         *) echo "Invalid VLLM_APPLY_PRESET_PRS value: $VLLM_APPLY_PRESET_PRS"; exit 1;; \
     esac; \
+    bash /tmp/apply_patch_series.sh vllm "$VLLM_REPO" \
+        "$VLLM_APPLY_REGULAR_PATCHES" /tmp/regular-vllm; \
     for pr in $VLLM_SELECTED_PRESET_PRS $VLLM_PRS; do \
         case " $VLLM_ALL_PRS " in \
             *" $pr "*) ;; \
@@ -525,6 +521,22 @@ RUN set -eux; \
 # the fix (idempotent); unknown partial source shapes fail the build.
 COPY docker/patch_vllm_*.py docker/pin_cutlass_dsl.py /tmp/vllm-patches/
 
+# TEMPORARY PATCH: production changes from vLLM PR #58028. With --api-key,
+# require authentication outside the liveness allowlist and true CORS
+# preflights. Match code separately from docstring formatting so this supports
+# both upstream and B12X. Remove once supported refs include the upstream fix.
+RUN python3 /tmp/vllm-patches/patch_vllm_api_key_auth.py .
+
+# TEMPORARY PATCH: vLLM PR #53007 / d29c88f162a3 chooses a large SWA
+# kernel block even when the backend cannot run the primary block unsplit.
+# On FlashInfer SM12x, 64 does not divide Qwen3.8's 1648-token page, so
+# DFlash2 pages become mostly padding. Preserve the PR's supported-primary
+# path and restore the smallest-block fallback. Remove once supported refs
+# contain an equivalent upstream fix; unexpected source layouts fail closed.
+# Supports both the original selector and #53175's per-layer KV-spec API.
+# Recognizes #60252's divisor-aware replacement from the regular patch series.
+RUN python3 /tmp/vllm-patches/patch_vllm_swa_block_size.py .
+
 # TEMPORARY PATCH: vLLM PR #53306 added a preliminary CUDA-graph memory
 # profiling capture, but only redirects the main graph manager and existing
 # wrappers to its throwaway pool. MTP and other autoregressive speculators own
@@ -626,16 +638,36 @@ RUN python3 /tmp/vllm-patches/patch_vllm_disable_minimax_qk_rmsnorm_ipc.py .
 # through this path. Preserve vector metadata when the destination slot matches.
 RUN python3 /tmp/vllm-patches/patch_vllm_routed_experts_weight_shape.py .
 
-# DGX Spark UMA cleanup: profile warmup can leave temporary CUDA allocator
-# reservations behind just before vLLM sizes and allocates KV cache blocks.
+# DGX Spark UMA cleanup for regular and B12X builds: release temporary CUDA
+# reservations and unused glibc CPU heap pages before measuring the KV budget.
 RUN python3 /tmp/vllm-patches/patch_vllm_spark_kv_cache_cleanup.py .
 
+# Return unused glibc CPU heap pages after startup GC in API servers and
+# workers. Keep this in the source build so exported wheels include it too.
+RUN python3 /tmp/vllm-patches/patch_vllm_startup_heap_trim.py .
 
-# Prepare build requirements
+# TEMPORARY PATCH: local-inference-lab/vllm 3d5f2b04 exports temporary MoE
+# tuning tensors as PreparedCall.owners, which b12x retains in serving plans.
+# Keep the trial lifetime in call closures so KV profiling can reclaim them.
+RUN python3 /tmp/vllm-patches/patch_vllm_b12x_moe_tuning_memory.py .
+
+# WSL guest RAM does not describe CUDA's allocation budget on UMA devices.
+# Keep the fix in exported wheels as well as the runner below.
+RUN python3 /tmp/vllm-patches/patch_vllm_wsl_cuda_uma.py .
+
+# Prepare build requirements. Upstream moved the Torch helper under tools/;
+# keep supporting older refs and forks with the root-level helper.
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     python3 /tmp/vllm-patches/pin_cutlass_dsl.py \
         "$CUTLASS_DSL_VERSION" --expected-count 1 requirements/cuda.txt && \
-    python3 use_existing_torch.py && \
+    if [ -f tools/use_existing_torch.py ]; then \
+        python3 tools/use_existing_torch.py; \
+    elif [ -f use_existing_torch.py ]; then \
+        python3 use_existing_torch.py; \
+    else \
+        echo "ERROR: vLLM source is missing tools/use_existing_torch.py and use_existing_torch.py; cannot preserve the installed PyTorch." >&2; \
+        exit 1; \
+    fi && \
     sed -i "/flashinfer/d" requirements/cuda.txt && \
     sed -i '/^triton\b/d' requirements/test/cuda.txt && \
     sed -i '/^fastsafetensors\b/d' requirements/test/cuda.txt && \
@@ -653,6 +685,13 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # RUN curl -L https://patch-diff.githubusercontent.com/raw/vllm-project/vllm/pull/34758.diff | patch -p1 -R || echo "Cannot revert PR #34758, skipping"
 # RUN curl -L https://patch-diff.githubusercontent.com/raw/vllm-project/vllm/pull/34302.diff | patch -p1 -R || echo "Cannot revert PR #34302, skipping"
 
+# Resolve after PRs and source patches: stable-ABI vLLM requires its declared
+# DeepGEMM fork/pin; older refs retain the SM121 regression workaround.
+COPY docker/prepare_deepgemm.py /tmp/prepare_deepgemm.py
+RUN --mount=type=cache,id=repo-cache,target=/repo-cache,sharing=locked \
+    python3 /tmp/prepare_deepgemm.py . /repo-cache "$DEEPGEMM_SRC_DIR" \
+        --repo "$DEEPGEMM_REPO" --ref "$DEEPGEMM_REF"
+
 # Final Compilation
 RUN --mount=type=cache,id=ccache,target=/root/.ccache \
     --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
@@ -661,6 +700,13 @@ RUN --mount=type=cache,id=ccache,target=/root/.ccache \
     --mount=type=cache,id=vllm-rust-target,target=/workspace/vllm/vllm/target \
     VLLM_REQUIRE_RUST_FRONTEND=1 CARGO_BUILD_JOBS=${MAX_JOBS} \
     uv build --no-build-isolation --wheel . --out-dir=/workspace/wheels -v
+
+# Keep this optional example with the selected source build for the runner.
+# The .vllm- prefix also ties it to wheel-download backup and replacement.
+RUN if [ -f examples/features/structured_diffusion/structured_server.py ]; then \
+        cp examples/features/structured_diffusion/structured_server.py \
+            /workspace/wheels/.vllm-structured-server.py; \
+    fi
 
 # Dump git refs in the wheels dir.
 RUN \
@@ -683,9 +729,6 @@ ARG TORCH_VERSION
 ARG TORCHVISION_VERSION
 ARG TORCHAUDIO_VERSION
 ARG CUTLASS_DSL_VERSION
-ARG B12X_REPO
-ARG B12X_REF
-ARG B12X_CACHEBUST
 
 # Transferring build settings from build image because of ptxas/jit compilation during vLLM startup
 # Build parallemism
@@ -711,13 +754,14 @@ ENV UV_LINK_MODE=copy
 
 # Mount additional packages from base builder image
 # Install runtime dependencies
+# DeepJIT dynamically loads libdw.so.1 for source locations in C++ stack traces.
 RUN --mount=type=bind,from=base,source=/workspace/vllm/nccl/build/pkg/deb,target=/workspace/nccl-pkg \
     apt update && \
     apt install -y --no-install-recommends \
     python3 python3-pip python3-dev vim curl git wget \
     libcudnn9-cuda-13 \
     libibverbs1 libibverbs-dev rdma-core \
-    libxcb1 earlyoom \
+    libxcb1 earlyoom liburing-dev pkg-config libdw1t64 \
     && cd /workspace/nccl-pkg && apt install -y --no-install-recommends --allow-downgrades --allow-change-held-packages ./*.deb \
     && rm -rf /var/lib/apt/lists/* \
     && pip install uv
@@ -749,7 +793,7 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
         "nvidia-cutlass-dsl[cu13]==$CUTLASS_DSL_VERSION" \
         "apache-tvm-ffi==0.1.12"
 
-# Install the shared/selected FlashInfer and vLLM profiles from independent
+# Install the selected FlashInfer and vLLM profiles from independent
 # named contexts (bind-mounted without adding the wheel files to an image layer).
 # PRE_TRANSFORMERS=1 is retained for manual legacy builds; build-and-copy.sh no longer sets it for --tf5.
 # FastAPI 0.137.0 adds _IncludedRouter entries that currently break
@@ -773,6 +817,13 @@ RUN --mount=type=bind,from=flashinfer_wheels,target=/workspace/flashinfer-wheels
     uv pip install /workspace/flashinfer-wheels/*.whl /workspace/vllm-wheels/*.whl \
         --override /tmp/wheel-override.txt
 
+# Older source refs and downloaded wheel sets may not include this example.
+RUN --mount=type=bind,from=vllm_wheels,target=/workspace/vllm-wheels \
+    if [ -f /workspace/vllm-wheels/.vllm-structured-server.py ]; then \
+        install -m 644 /workspace/vllm-wheels/.vllm-structured-server.py \
+            "$VLLM_BASE_DIR/structured_server.py"; \
+    fi
+
 # Setup environment for runtime
 ARG TORCH_CUDA_ARCH_LIST="12.1a"
 ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
@@ -781,6 +832,13 @@ ENV FLASHINFER_CUDA_ARCH_LIST=${FLASHINFER_CUDA_ARCH_LIST}
 ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
 ENV TIKTOKEN_ENCODINGS_BASE=$VLLM_BASE_DIR/tiktoken_encodings
 ENV PATH=$VLLM_BASE_DIR:$PATH
+# Enable vLLM's WSL2 pinned-memory path; override with -e VLLM_WSL2_ENABLE_PIN_MEMORY=0.
+ENV VLLM_WSL2_ENABLE_PIN_MEMORY=1
+# Limit InstantTensor's in-flight I/O to reduce GPU and pinned host buffer usage.
+# Override per launch with -e INSTANTTENSOR_IO_DEPTH=<depth>.
+ENV INSTANTTENSOR_IO_DEPTH=16
+# TODO: Make the B12X autotuning default architecture dependent.
+# ENV B12X_AUTOTUNE=0
 
 
 # Final extra deps
@@ -798,27 +856,22 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv pip install ray[default] fastsafetensors instanttensor \
         --override /tmp/torch-override.txt
 
-# Upstream vLLM and the local-inference-lab fork consume the external B12X
-# kernel package at runtime. Build B12X from its source repository but
-# install it without dependencies: vLLM already provides the runtime packages
-# and this image deliberately advances nvidia-cutlass-dsl to 4.7.0 for both
-# regular and B12X builds. B12X kernels remain JIT-compiled on first use;
-# building its Python wheel here does not compile the CUDA kernels.
-COPY docker/pin_cutlass_dsl.py /tmp/pin_cutlass_dsl.py
-RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    if [ -n "$B12X_REPO" ]; then \
-        echo "Refreshing B12X source (cache key: $B12X_CACHEBUST)" && \
-        git clone --depth 1 --branch "$B12X_REF" "$B12X_REPO" /tmp/b12x-source && \
-        B12X_COMMIT=$(git -C /tmp/b12x-source rev-parse HEAD) && \
-        python3 /tmp/pin_cutlass_dsl.py "$CUTLASS_DSL_VERSION" \
-            --expected-count 5 /tmp/b12x-source/pyproject.toml && \
-        uv pip install --reinstall --no-deps /tmp/b12x-source && \
-        printf '%s\n' "$B12X_COMMIT" > /workspace/b12x-source-commit && \
-        python3 -c "import importlib.metadata as m, sys; import b12x; print('Verified B12X', m.version('b12x'), 'from source commit', sys.argv[1], 'with CUTLASS DSL', m.version('nvidia-cutlass-dsl'))" "$B12X_COMMIT" && \
-        rm -rf /tmp/b12x-source; \
-    else \
-        echo "B12X source build not requested; skipping."; \
-    fi
+# B12X is supplied by FlashInfer, including its CuTe cache-integrity fix.
+
+# Cached or downloaded wheels can predate the CUDA-on-WSL reporting fix.
+# This also accepts wheels that already contain the source-stage patch.
+COPY docker/patch_vllm_wsl_cuda_uma.py /tmp/vllm-patches/patch_vllm_wsl_cuda_uma.py
+RUN python3 /tmp/vllm-patches/patch_vllm_wsl_cuda_uma.py --installed
+
+# InstantTensor must share vLLM's available-memory accounting on native UMA
+# and WSL. Apply after all package installs for regular, B12X, and wheel runners.
+COPY docker/patch_instanttensor_vllm_memory.py /tmp/instanttensor-patches/patch_instanttensor_vllm_memory.py
+RUN python3 /tmp/instanttensor-patches/patch_instanttensor_vllm_memory.py --installed
+
+# Enumerate Torch schema arguments once per fill_defaults call. Apply after all
+# package installs so regular, B12X, and precompiled-wheel runners retain the fix.
+COPY docker/patch_torch_schema_enumeration.py /tmp/torch-patches/patch_torch_schema_enumeration.py
+RUN python3 /tmp/torch-patches/patch_torch_schema_enumeration.py --installed
 
 # Fix NCCL
 RUN rm /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2 && \
