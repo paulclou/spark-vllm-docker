@@ -80,6 +80,13 @@ When using cluster mode with `--setup`:
 
 ### Cluster-Only Recipes
 
+`deepseek-v4.1-flash` is a top-level symlink to
+[`4x-spark-cluster/deepseek-v4.1-flash.yaml`](4x-spark-cluster/deepseek-v4.1-flash.yaml).
+The short name selects the four-Spark recipe, so a service template that passes
+its instance name to `run-recipe.sh` can use `vllm@deepseek-v4.1-flash` directly.
+It uses the recipe's `vllm-node-b12x` image tag. For three Sparks, pass
+`recipes/3x-spark-cluster/deepseek-v4.1-flash.yaml` explicitly.
+
 Some models are too large to run on a single node. These recipes have `cluster_only: true` and will fail with a helpful error if you try to run them in solo mode:
 
 ```bash
