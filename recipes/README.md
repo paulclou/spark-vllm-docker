@@ -87,6 +87,28 @@ its instance name to `run-recipe.sh` can use `vllm@deepseek-v4.1-flash` directly
 It uses the recipe's `vllm-node-b12x` image tag. For three Sparks, pass
 `recipes/3x-spark-cluster/deepseek-v4.1-flash.yaml` explicitly.
 
+### DeepSeek V4.1 Flash image count
+
+Both the three- and four-Spark recipes accept up to five images per request.
+This deliberately raises eugr's recipe cap of one to match
+[omp 18.11.0's fallback image budget](https://github.com/can1357/oh-my-pi/blob/v18.11.0/packages/snapcompact/src/snapcompact.ts#L577-L587).
+omp retains images from earlier turns and trims the oldest beyond that budget;
+a server cap of one rejects the request as soon as a second image enters the
+conversation. The count applies to the complete request, including history and
+tool results, rather than just the latest user message.
+
+The one-image cap is a serving choice, not a DS4.1F implementation limit:
+[vLLM's model guide](https://recipes.vllm.ai/deepseek-ai/DeepSeek-V4.1-Flash#images)
+documents support for multiple images without a model-specific count limit.
+vLLM rejects requests above the configured cap; it does not trim them. Clients
+without their own trimming must stay within five images.
+
+The new cap takes effect after relaunching with the updated recipe; no image
+rebuild is needed. Before replacing a client-side workaround, verify two- and
+five-image requests and an omp conversation that accumulates more than five
+images. Check memory use as well: recipe dry-runs do not validate vision
+profiling, multi-image accuracy, or the running deployment's configuration.
+
 Some models are too large to run on a single node. These recipes have `cluster_only: true` and will fail with a helpful error if you try to run them in solo mode:
 
 ```bash
