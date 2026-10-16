@@ -1,4 +1,5 @@
 # Recipe: DeepSeek V4.1 Flash (4x DGX Spark)
+# Image cap 5 matches omp's fallback request budget; see recipes/README.md.
 
 recipe_version: "1"
 name: DeepSeek-V4.1-Flash (TP=4)
@@ -45,7 +46,7 @@ command: |
       --max-model-len {max_model_len} \
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
-      --limit-mm-per-prompt '{{"image":1}}' \
+      --limit-mm-per-prompt '{{"image":5}}' \
       --engram-config '{{"cpu_offload":false,"table_memory":"disk"}}' \
       --linear-backend b12x \
       --moe-backend b12x \
