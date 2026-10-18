@@ -20,7 +20,7 @@ defaults:
   tensor_parallel: 4
   block_size: 256
   gpu_memory_utilization: 0.87
-  max_model_len: auto
+  max_model_len: 1048576
   max_num_seqs: 2
   max_num_batched_tokens: 4096
   num_speculative_tokens: 7

@@ -105,13 +105,17 @@ explicitly. The original recipes remain available.
 ./run-recipe.sh recipes/3x-spark-cluster/deepseek-v4.1-flash-1017.yaml --setup
 ```
 
-These recipes retain the original B12X/DSpark settings and five-image request
-cap, and explicitly select `--tokenizer-mode deepseek_v41` because the new
+These recipes pin the full 1,048,576-token context window, retain the original
+B12X/DSpark settings and five-image request cap, and explicitly select `--tokenizer-mode deepseek_v41` because the new
 checkpoint ships no Jinja chat template. Clients must request the full new
 model ID above. See the [compatibility and qualification notes](../docs/tuning/deepseek-v4.1-flash-1017.md)
 before deployment, including the requirement to use the new checkpoint's
 matching Engram tables. Validation here covers generated commands; the new
-weights have not been qualified on a live Spark cluster.
+weights have not been qualified on a live Spark cluster. The three-node
+variant removes the original `0.5g` KV cap because current B12X source
+predicts it is insufficient for 1M context; both variants size KV memory
+from their existing GPU utilization setting. Startup still rejects an
+insufficient budget rather than silently reducing the context.
 
 ### DeepSeek V4.1 Flash image count
 

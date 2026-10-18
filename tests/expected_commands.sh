@@ -88,6 +88,7 @@ MINIMAX_CLUSTER_ARGS=()
 DEEPSEEK_V41_1017_MODEL="deepseek-ai/DeepSeek-V4.1-Flash-1017"
 DEEPSEEK_V41_1017_CONTAINER="vllm-node-b12x"
 DEEPSEEK_V41_1017_ARGS=(
+    "--max-model-len 1048576"
     "--load-format b12x"
     "--tokenizer-mode deepseek_v41"
     "--reasoning-parser deepseek_v41"

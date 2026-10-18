@@ -1,5 +1,6 @@
 # Recipe: DeepSeek V4.1 Flash 1017 (3x DGX Spark)
 # Image cap 5 matches the agent budget; see recipes/README.md.
+# KV budget is automatic to permit explicit 1M; see the tuning notes below.
 # Uses the V4.1 encoder (no Jinja template); see docs/tuning/deepseek-v4.1-flash-1017.md.
 
 recipe_version: "1"
@@ -20,11 +21,10 @@ defaults:
   tensor_parallel: 3
   block_size: 256
   gpu_memory_utilization: 0.87
-  max_model_len: auto
+  max_model_len: 1048576
   max_num_seqs: 2
   max_num_batched_tokens: 4096
   num_speculative_tokens: 7
-  kv_cache_memory_bytes: "0.5g"
 
 env:
   VLLM_ENABLE_ROCE_ALLREDUCE: "1"
@@ -57,5 +57,4 @@ command: |
       --tokenizer-mode deepseek_v41 \
       --reasoning-parser deepseek_v41 \
       --tool-call-parser deepseek_v41 \
-      --enable-auto-tool-choice \
-      --kv-cache-memory-bytes {kv_cache_memory_bytes}
+      --enable-auto-tool-choice
