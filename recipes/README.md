@@ -87,6 +87,36 @@ its instance name to `run-recipe.sh` can use `vllm@deepseek-v4.1-flash` directly
 It uses the recipe's `vllm-node-b12x` image tag. For three Sparks, pass
 `recipes/3x-spark-cluster/deepseek-v4.1-flash.yaml` explicitly.
 
+### DeepSeek V4.1 Flash 1017
+
+`deepseek-v4.1-flash-1017` selects the new
+`deepseek-ai/DeepSeek-V4.1-Flash-1017` checkpoint on four Sparks through
+[`4x-spark-cluster/deepseek-v4.1-flash-1017.yaml`](4x-spark-cluster/deepseek-v4.1-flash-1017.yaml).
+The corresponding service instance is `vllm@deepseek-v4.1-flash-1017`.
+For three Sparks, select
+[`3x-spark-cluster/deepseek-v4.1-flash-1017.yaml`](3x-spark-cluster/deepseek-v4.1-flash-1017.yaml)
+explicitly. The original recipes remain available.
+
+```bash
+# Four Sparks, using the saved cluster configuration
+./run-recipe.sh deepseek-v4.1-flash-1017 --setup
+
+# Three Sparks
+./run-recipe.sh recipes/3x-spark-cluster/deepseek-v4.1-flash-1017.yaml --setup
+```
+
+These recipes pin the full 1,048,576-token context window, retain the original
+B12X/DSpark settings and five-image request cap, and explicitly select `--tokenizer-mode deepseek_v41` because the new
+checkpoint ships no Jinja chat template. Clients must request the full new
+model ID above. See the [compatibility and qualification notes](../docs/tuning/deepseek-v4.1-flash-1017.md)
+before deployment, including the requirement to use the new checkpoint's
+matching Engram tables. Validation here covers generated commands; the new
+weights have not been qualified on a live Spark cluster. The three-node
+variant removes the original `0.5g` KV cap because current B12X source
+predicts it is insufficient for 1M context; both variants size KV memory
+from their existing GPU utilization setting. Startup still rejects an
+insufficient budget rather than silently reducing the context.
+
 ### DeepSeek V4.1 Flash image count
 
 Both the three- and four-Spark recipes accept up to five images per request.
