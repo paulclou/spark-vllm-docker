@@ -17,6 +17,29 @@ matching reasoning and tool-call parsers. This mode is accepted by the
 The card recommends temperature 1.0 and top_p 1.0; configure sampling in the
 client as appropriate for its task.
 
+### Model-card defaults audit
+
+| Setting | Model card | Recipe behavior |
+| --- | --- | --- |
+| Temperature / top_p | 1.0 / 1.0 | No override; the B12X Chat Completions fallbacks are 1.0 / 1.0. |
+| Context window | 1M tokens | `--max-model-len auto` retains memory-based sizing, bounded by the model's 1,048,576-token config; full context is not pinned or runtime-qualified. |
+| Output budget | At least 256K tokens | Request-driven; the recipe sets no output-token limit. A client must request a suitable budget within the effective context. |
+
+Neither checkpoint supplies `generation_config.json` or sampling overrides
+in `config.json`. The [B12X Chat Completions protocol](https://github.com/local-inference-lab/vllm/blob/dev/karmic-kraken/vllm/entrypoints/openai/chat_completion/protocol.py)
+uses the sampling fallbacks above when the request omits them. The companion
+pi registration uses a 262144-token output budget; omp does not install a
+global output clamp and uses the available context when the request omits a
+budget. Client requests can override sampling and output size.
+
+These are adaptations of the existing Spark recipes, rather than a claim
+that every serving flag is a model-card default. Relative to the matching
+non-1017 recipe, the generated vLLM command changes only the checkpoint ID
+and adds `--tokenizer-mode deepseek_v41`. Recipe names, descriptions, header
+comments, and the four-node short alias identify the new variant; all prior
+defaults, environment variables, B12X/DSpark tuning, disk Engram placement,
+image cap, and three-node KV budget remain identical.
+
 Metadata inspected at checkpoint revision
 `1bae0e1088993b9b82de08f59de5be5a34e42170` matches the original checkpoint's
 architecture configuration, tokenizer files, tensor index, and total shard
