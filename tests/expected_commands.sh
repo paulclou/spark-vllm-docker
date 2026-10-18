@@ -81,3 +81,18 @@ GLM_FLASH_AWQ_CLUSTER_TP="1"
 # minimax-m2-awq cluster mode (2 nodes = tp 2)
 MINIMAX_CLUSTER_TP="2"
 MINIMAX_CLUSTER_ARGS=()
+
+# DeepSeek V4.1 Flash 1017; recipes/README.md and docs/tuning ledger.
+# Validate these with the intended three/four-node counts, not the generic
+# two-node helper used by the older README checks.
+DEEPSEEK_V41_1017_MODEL="deepseek-ai/DeepSeek-V4.1-Flash-1017"
+DEEPSEEK_V41_1017_CONTAINER="vllm-node-b12x"
+DEEPSEEK_V41_1017_ARGS=(
+    "--load-format b12x"
+    "--tokenizer-mode deepseek_v41"
+    "--reasoning-parser deepseek_v41"
+    "--tool-call-parser deepseek_v41"
+    "--enable-auto-tool-choice"
+    '--limit-mm-per-prompt '\''{"image":5}'\'''
+    '--engram-config '\''{"cpu_offload":false,"table_memory":"disk"}'\'''
+)
