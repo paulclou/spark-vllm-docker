@@ -9,8 +9,12 @@ on:
       - 'launch-cluster.sh'
       - 'autodiscover.sh'
       - 'cluster_topology.py'
+      - 'setup-cluster.sh'
+      - 'setup-cluster.py'
+      - 'setup_cluster_node.py'
       - 'build-and-copy.sh'
-      - 'docker/image_identity.py'
+      - 'Dockerfile'
+      - 'docker/**'
       - 'hf-download.sh'
       - 'hf-cache.py'
       - 'recipes/**'
@@ -25,8 +29,12 @@ on:
       - 'launch-cluster.sh'
       - 'autodiscover.sh'
       - 'cluster_topology.py'
+      - 'setup-cluster.sh'
+      - 'setup-cluster.py'
+      - 'setup_cluster_node.py'
       - 'build-and-copy.sh'
-      - 'docker/image_identity.py'
+      - 'Dockerfile'
+      - 'docker/**'
       - 'hf-download.sh'
       - 'hf-cache.py'
       - 'recipes/**'
@@ -73,6 +81,11 @@ jobs:
     - name: Test ring discovery and routed distribution
       run: python3 tests/test_cluster_topology.py
 
+    - name: Test cluster setup and restore without live nodes
+      run: |
+        bash -n setup-cluster.sh
+        python3 tests/test_setup_cluster.py
+
     - name: Test Hugging Face cache management and copies
       run: |
         python3 tests/test_hf_cache_management.py
@@ -85,6 +98,7 @@ jobs:
 
     - name: Run recipe integration tests
       run: |
+        python3 tests/test_run_recipe.py
         ./tests/test_recipes.sh -v
         ./tests/test_launch_cluster_image_sync.sh
         ./tests/test_launch_cluster_vllm_pr.sh
@@ -95,6 +109,12 @@ jobs:
       run: |
         python3 tests/test_image_identity.py
         bash tests/test_build_and_copy.sh
+
+    - name: Test source patch series and B12X source fixes
+      run: |
+        python3 tests/test_regular_patch_series.py
+        python3 tests/test_vllm_b12x_scale_swizzle.py
+        python3 tests/test_flashinfer_b12x_loader_include_order_patch.py
     
     - name: Verify all recipes with dry-run
       run: |
@@ -102,8 +122,10 @@ jobs:
           name=$(basename "$recipe" .yaml)
           echo "Testing recipe: $name"
           if grep -qE '^cluster_only:[[:space:]]*true' "$recipe"; then
-            ./run-recipe.py "$name" --dry-run -n "10.0.0.1,10.0.0.2" || exit 1
+            count=$(python3 -c 'import sys, yaml; d = yaml.safe_load(open(sys.argv[1])).get("defaults", {}); print(max(2, d.get("tensor_parallel", 1) * d.get("pipeline_parallel", 1)))' "$recipe") || exit 1
+            nodes=$(printf '10.0.0.%s,' $(seq "$count"))
+            ./run-recipe.py "$name" --config /dev/null --dry-run -n "${nodes%,}" || exit 1
           else
-            ./run-recipe.py "$name" --dry-run --solo || exit 1
+            ./run-recipe.py "$name" --config /dev/null --dry-run --solo || exit 1
           fi
         done

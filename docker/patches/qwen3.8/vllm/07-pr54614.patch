@@ -2,48 +2,54 @@ From: Stefano Castagnetta <scastagnetta@nvidia.com>
 Subject: [PATCH] [PR #54614] [Kernel] Dynamic NVFP4 W4A4/W4A16 selection with shared weights
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/54614
-Upstream-Commit: 7fb05c982f69233c0175fea2e54bda441e96476b
-Integration-Base: 3c062d391d15cfa41d3f321cad24f3030c892a97
+Upstream-Commit: 5feaedcf9b4fa18d9e0b817153d681bededdd4d9
+Integration-Base: 564ac0de1b228568cafcbfbe8ccaccc82d6023eb
+Refresh-Base: b409a4f0d787fdddb75ec2e8ddb6dfcfd36235b7
 
-Preserve the quantized-input shape and autotune cache-key tests from main.
+Preserve upstream's removal of the batch-invariant W4A16 test and its imports.
+Keep DeepSeek indexer autotuning alongside dynamic NVFP4 logits warmup.
+
+Preserve the upstream W4A16 and autotune cache-key tests.
 Keep round_up=True and full-model autotuning after removal of the obsolete
 BF16-only warmup path.
 
+Upstream removed Qwen2MoE; do not restore its obsolete model-specific hunk.
+
 diff --git a/.buildkite/test_areas/kernels.yaml b/.buildkite/test_areas/kernels.yaml
-index aa0971b4c55ed08435cf21689eb332865d9fa075..fb792c4716882a87b49257adc3d7c17fa909ac09 100644
+index 43eb5eb02d362585154cfd0edc753f4605b19bed..e4c3dbdd62ffbeeace4e226486ce27bc894f9a21 100644
 --- a/.buildkite/test_areas/kernels.yaml
 +++ b/.buildkite/test_areas/kernels.yaml
-@@ -717,11 +717,16 @@ steps:
-   - vllm/model_executor/layers/quantization/mxfp4.py
-   - vllm/model_executor/layers/quantization/utils/b12x_moe.py
-   - vllm/model_executor/warmup/b12x_warmup.py
-+  - vllm/model_executor/warmup/kernel_warmup.py
-+  - vllm/model_executor/models/qwen2_moe.py
-   - vllm/utils/b12x.py
-   - tests/kernels/moe/test_b12x.py
-   - tests/kernels/quantization/nvfp4_utils.py
-   - tests/model_executor/kernels/test_b12x_linear.py
-   - tests/model_executor/test_b12x_warmup.py
-+  - tests/kernels/quantization/test_flashinfer_nvfp4_scaled_mm.py
-+  - tests/kernels/quantization/test_nvfp4_kernel_selection.py
-+  - tests/model_executor/test_flashinfer_autotune_warmup.py
-   - tests/kernels/quantization/test_block_fp8.py
-   - tests/quantization/reference_mxfp4.py
-   - tests/quantization/test_auto_round.py
-@@ -732,6 +737,13 @@ steps:
-       kernels/quantization/test_block_fp8.py
-       kernels/moe/test_b12x.py
-       quantization/test_auto_round.py -k b12x
-+  # Native W4A16 is merged but not included in FlashInfer 0.7.0.
-+  - BUILD_NVEP=0 uv pip install --system --no-deps
-+      'flashinfer-python @ git+https://github.com/flashinfer-ai/flashinfer.git@2f3bc5acff26e239696b57fe27d86af1624a8f86'
-+  - pytest -v -s kernels/quantization/test_flashinfer_nvfp4_scaled_mm.py
-+      -k dynamic_precision
-+  - pytest -v -s kernels/quantization/test_nvfp4_kernel_selection.py
-+      model_executor/test_flashinfer_autotune_warmup.py
- 
- - label: ":nvidia: (H100) Helion Kernels Shard %N"
-   key: kernels-helion-test
+@@ -1010,11 +1010,16 @@ steps:
+ #   - vllm/model_executor/layers/quantization/mxfp4.py
+ #   - vllm/model_executor/layers/quantization/utils/b12x_moe.py
+ #   - vllm/model_executor/warmup/b12x_warmup.py
++#   - vllm/model_executor/warmup/kernel_warmup.py
++#   - vllm/model_executor/models/qwen2_moe.py
+ #   - vllm/utils/b12x.py
+ #   - tests/kernels/moe/test_b12x.py
+ #   - tests/kernels/quantization/nvfp4_utils.py
+ #   - tests/model_executor/kernels/test_b12x_linear.py
+ #   - tests/model_executor/test_b12x_warmup.py
++#   - tests/kernels/quantization/test_flashinfer_nvfp4_scaled_mm.py
++#   - tests/kernels/quantization/test_nvfp4_kernel_selection.py
++#   - tests/model_executor/test_flashinfer_autotune_warmup.py
+ #   - tests/kernels/quantization/test_block_fp8.py
+ #   - tests/quantization/reference_mxfp4.py
+ #   - tests/quantization/test_auto_round.py
+@@ -1024,6 +1029,13 @@ steps:
+ #       kernels/quantization/test_block_fp8.py
+ #       kernels/moe/test_b12x.py
+ #       quantization/test_auto_round.py -k b12x
++#   # Native W4A16 is merged but not included in FlashInfer 0.7.0.
++#   - BUILD_NVEP=0 uv pip install --system --no-deps
++#       'flashinfer-python @ git+https://github.com/flashinfer-ai/flashinfer.git@2f3bc5acff26e239696b57fe27d86af1624a8f86'
++#   - pytest -v -s kernels/quantization/test_flashinfer_nvfp4_scaled_mm.py
++#       -k dynamic_precision
++#   - pytest -v -s kernels/quantization/test_nvfp4_kernel_selection.py
++#       model_executor/test_flashinfer_autotune_warmup.py
+
+ # Disabled until helion transitive dependencies are locked.
+ # - label: ":nvidia: (H100) Helion Kernels Shard %N"
 diff --git a/benchmarks/kernels/benchmark_nvfp4_dynamic.py b/benchmarks/kernels/benchmark_nvfp4_dynamic.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..6b17169b5860ff547fd689ba57b977e38593fbb9
@@ -526,13 +532,15 @@ index 0000000000000000000000000000000000000000..6b17169b5860ff547fd689ba57b977e3
 +if __name__ == "__main__":
 +    main()
 diff --git a/tests/kernels/quantization/test_flashinfer_nvfp4_scaled_mm.py b/tests/kernels/quantization/test_flashinfer_nvfp4_scaled_mm.py
-index 47c25d046d2c13df9f5a437d5e0da1c933f2e569..c7622f7a6541093571a139c7179d8cbfe9747238 100644
+index 54dcaa0b97eab2075586f486d500a539371a20e1..c2f571c96ecdff76857b83e5ce6693b428d671d2 100644
 --- a/tests/kernels/quantization/test_flashinfer_nvfp4_scaled_mm.py
 +++ b/tests/kernels/quantization/test_flashinfer_nvfp4_scaled_mm.py
-@@ -99,6 +99,114 @@ def test_flashinfer_nvfp4_preserves_quantized_input_shape(
-     torch.testing.assert_close(actual.reshape(expected.shape), expected)
- 
- 
+@@ -226,3 +226,113 @@ def test_flashinfer_cutedsl_nvfp4_w4a16_linear(
+     expected = F.linear(x, weight_ref)
+     assert output.shape == (m, n)
+     torch.testing.assert_close(output, expected, atol=1e-1, rtol=1e-1)
++
++
 +@pytest.mark.parametrize(
 +    "w4a4_backend",
 +    ["flashinfer_cutlass", "flashinfer_b12x", "flashinfer_cudnn", "flashinfer_cutedsl"],
@@ -641,9 +649,6 @@ index 47c25d046d2c13df9f5a437d5e0da1c933f2e569..c7622f7a6541093571a139c7179d8cbf
 +        torch.testing.assert_close(replay, reference(), atol=0.03, rtol=0.01)
 +
 +
- def get_ref_results(
-     a_fp4,
-     b_fp4,
 diff --git a/tests/kernels/quantization/test_nvfp4_kernel_selection.py b/tests/kernels/quantization/test_nvfp4_kernel_selection.py
 index ba069dbad1767a29caebb9fa818b1f2e59852f7e..57fd844ec86701d4ff5d309835056a6faae8f542 100644
 --- a/tests/kernels/quantization/test_nvfp4_kernel_selection.py
@@ -651,16 +656,16 @@ index ba069dbad1767a29caebb9fa818b1f2e59852f7e..57fd844ec86701d4ff5d309835056a6f
 @@ -2,6 +2,8 @@
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
  """Tests for NVFP4 linear kernel selection order (CPU-only)."""
- 
+
 +from collections.abc import Callable
 +
  import pytest
- 
+
  from vllm.model_executor.kernels.linear import (
 @@ -22,6 +24,10 @@ W4A4_KERNELS_ON_SM12X = (
  )
- 
- 
+
+
 +def _constant_support(available: bool) -> Callable[[int], bool]:
 +    return lambda cc: available
 +
@@ -762,30 +767,13 @@ index ba069dbad1767a29caebb9fa818b1f2e59852f7e..57fd844ec86701d4ff5d309835056a6f
 +    if not supported:
 +        assert "flashinfer_cutlass" in reason
 diff --git a/tests/model_executor/test_flashinfer_autotune_warmup.py b/tests/model_executor/test_flashinfer_autotune_warmup.py
-index 59046a5f3e8d6115a206cfeb4affb25b92a89e87..b8e07dd0d1f918f456728f394808eb3a3ed2a016 100644
+index f6c2aaed951ccd95cf899a3d932c064e1363d656..2d44445041ad31b9aee745cfd07c611507e888ce 100644
 --- a/tests/model_executor/test_flashinfer_autotune_warmup.py
 +++ b/tests/model_executor/test_flashinfer_autotune_warmup.py
-@@ -4,7 +4,7 @@
- import json
- import sys
- from collections import defaultdict
--from contextlib import nullcontext
-+from contextlib import contextmanager, nullcontext
- from inspect import signature
- from pathlib import Path
- from types import ModuleType, SimpleNamespace
-@@ -12,6 +12,7 @@ from typing import Any
- from unittest.mock import Mock, call, patch
- 
- import pytest
-+import torch
- 
- from vllm.model_executor.warmup import kernel_warmup as warmup
- from vllm.model_executor.warmup.kernel_warmup import (
-@@ -39,11 +40,12 @@ def _make_moe(*, max_deferred_tokens: int = 128, enabled: bool = True):
+@@ -176,11 +176,12 @@ def _make_moe(*, max_deferred_tokens: int = 128, enabled: bool = True):
      return moe
- 
- 
+
+
 -def _make_runner(modules, *, max_tokens: int = 8192):
 +def _make_runner(modules, *, max_tokens: int = 8192, linear_backend: str = "auto"):
      """Create a runner carrying only the state used by FlashInfer warmup."""
@@ -793,13 +781,13 @@ index 59046a5f3e8d6115a206cfeb4affb25b92a89e87..b8e07dd0d1f918f456728f394808eb3a
          scheduler_config=SimpleNamespace(max_num_batched_tokens=max_tokens),
          vllm_config=SimpleNamespace(
 +            kernel_config=SimpleNamespace(linear_backend=linear_backend),
+             model_config=None,
              attention_config=SimpleNamespace(hisparse_config=None),
-             parallel_config=SimpleNamespace(data_parallel_rank=0),
-         ),
-@@ -83,6 +85,29 @@ def test_flashinfer_autotune_token_counts_are_bounded_and_deduplicated():
-     assert token_counts == (32,)
- 
- 
+             parallel_config=SimpleNamespace(
+@@ -845,3 +846,69 @@ def test_autotune_cache_key_separates_moe_routed_tuning_under_dp(monkeypatch):
+     assert key(2, "1", routed=False) == key(2, "0", routed=False)
+     sim = "uniform_random"
+     assert key(2, "1", routed=True, sim=sim) == key(2, "0", routed=True, sim=sim)
 +@pytest.mark.parametrize(
 +    "linear_cutoff,silu_cutoff,max_tokens,expected",
 +    [
@@ -823,13 +811,6 @@ index 59046a5f3e8d6115a206cfeb4affb25b92a89e87..b8e07dd0d1f918f456728f394808eb3a
 +        assert _flashinfer_autotune_token_counts(runner) == expected
 +
 +
- @pytest.mark.parametrize("skip_attn", [False, True])
- def test_flashinfer_autotune_uses_token_buckets_for_each_dummy_run(skip_attn):
-     from vllm.v1.worker.gpu.model_runner import GPUModelRunner as V2Runner
-@@ -417,3 +442,46 @@ def test_autotune_cache_key_normalizes_kv_init_fields():
-         _normalize_cache_config_for_hash(resolved).compute_hash()
-         != fresh.compute_hash()
-     )
 +
 +
 +def test_dynamic_nvfp4_logits_tuning_is_bounded_by_sampled_sequences():
@@ -874,10 +855,10 @@ index 59046a5f3e8d6115a206cfeb4affb25b92a89e87..b8e07dd0d1f918f456728f394808eb3a
 +    }
 +    assert not active_buckets
 diff --git a/vllm/config/kernel.py b/vllm/config/kernel.py
-index fa3ecf5df95da3b2cc3da73b8601686698f7dc25..89280e024023ad05355704b839804fa75c22a9fe 100644
+index 76aa870e97d0397ed3c309479b40ce30660206d1..f605911ee6b4d10c20e7b4666da6e10987840912 100644
 --- a/vllm/config/kernel.py
 +++ b/vllm/config/kernel.py
-@@ -246,6 +246,7 @@ LinearBackend = Literal[
+@@ -250,6 +250,7 @@ LinearBackend = Literal[
      "cutlass",
      "flashinfer_cutlass",
      "flashinfer_cutedsl",
@@ -885,10 +866,10 @@ index fa3ecf5df95da3b2cc3da73b8601686698f7dc25..89280e024023ad05355704b839804fa7
      "flashinfer_trtllm",
      "flashinfer_cudnn",
      "flashinfer_b12x",
-@@ -276,6 +277,18 @@ class KernelConfig:
-     Platform defaults appended automatically during VllmConfig.__post_init__.
+@@ -286,6 +287,18 @@ class KernelConfig:
+     v0.34.0. Kernels will be selected by the platform, as for other custom ops.
      """
- 
+
 +    nvfp4_dynamic_max_tokens: int = Field(default=0, ge=0, le=16)
 +    """NVFP4 A16 cutoff. Zero selects W4A4 for every call."""
 +
@@ -902,16 +883,16 @@ index fa3ecf5df95da3b2cc3da73b8601686698f7dc25..89280e024023ad05355704b839804fa7
 +    """Canonical-layout W4A16 candidate for nvfp4_dynamic."""
 +
      enable_flashinfer_autotune: bool = None  # type: ignore[assignment]
-     """If True, run FlashInfer autotuning during kernel warmup."""
- 
+     """Benchmark FlashInfer kernel implementations during warmup and use the
+     fastest. Enabled by default except at `-O0`; disable for faster startup."""
 diff --git a/vllm/model_executor/kernels/linear/__init__.py b/vllm/model_executor/kernels/linear/__init__.py
-index 484143ffc14a0ac49486101fc423115a2c9c9965..575781630d4b73dffa64c138362bad683cca8751 100644
+index cd32cde34f92166fbe1b1c285f0373a97601af6a..ea0142061efa2ad0d7fc4537b7b1a95676f3412f 100644
 --- a/vllm/model_executor/kernels/linear/__init__.py
 +++ b/vllm/model_executor/kernels/linear/__init__.py
-@@ -1138,6 +1138,15 @@ def init_nvfp4_linear_kernel(use_a16: bool = False) -> NvFp4LinearKernel:
+@@ -1383,6 +1383,15 @@ def init_nvfp4_linear_kernel(
          elif not prefers_humming(compute_capability):
              force_kernel = MarlinNvFp4LinearKernel
- 
+
 +    if linear_backend == "nvfp4_dynamic":
 +        from .nvfp4.dynamic import DynamicNvFp4LinearKernel
 +
@@ -1322,40 +1303,11 @@ index 0000000000000000000000000000000000000000..15b2a4870acee673cebbe135b74cbe4f
 +            f"NVFP4 candidate {name!r} does not implement W4A{activation_bits}"
 +        )
 +    return candidate
-diff --git a/vllm/model_executor/models/qwen2_moe.py b/vllm/model_executor/models/qwen2_moe.py
-index 1c095d6f091c8bc932cd4058bfd1e89f6f141b85..020f465cedc33b7fc2607bf8bbfd9a0380494550 100644
---- a/vllm/model_executor/models/qwen2_moe.py
-+++ b/vllm/model_executor/models/qwen2_moe.py
-@@ -111,11 +111,22 @@ class Qwen2MoeMLP(nn.Module):
-             )
-         self.act_fn = SiluAndMul()
-         self.expert_gate = expert_gate
-+        from vllm.model_executor.kernels.linear.nvfp4.dynamic import (
-+            DynamicNvFp4LinearKernel,
-+        )
-+
-+        kernel = getattr(self.down_proj.quant_method, "kernel", None)
-+        self._dynamic_nvfp4 = isinstance(kernel, DynamicNvFp4LinearKernel)
- 
-     def forward(self, x):
-         gate_up, _ = self.gate_up_proj(x)
--        out = self.act_fn(gate_up)
--        out, _ = self.down_proj(out)
-+        if self._dynamic_nvfp4:
-+            kernel = getattr(self.down_proj.quant_method, "kernel", None)
-+            assert kernel is not None
-+            out = kernel.apply_silu_or_linear(self.down_proj, gate_up, True)
-+        else:
-+            out = self.act_fn(gate_up)
-+            out, _ = self.down_proj(out)
- 
-         if self.expert_gate is not None:
-             out = F.sigmoid(self.expert_gate(x)[0]) * out
 diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
-index 685b33a5652a23cc28eb5eeddc0cd1e59bd017c2..ec932733b1c767519be47426883437d5bbc5b16f 100644
+index 7038adc676b4b1f70b9a9302d24882744337e904..ae388b8436441875d8a953de6aaf200e9056a103 100644
 --- a/vllm/model_executor/warmup/kernel_warmup.py
 +++ b/vllm/model_executor/warmup/kernel_warmup.py
-@@ -340,6 +340,19 @@ def _flashinfer_autotune_token_counts(runner: "GPUModelRunner") -> tuple[int, ..
+@@ -448,6 +448,19 @@ def _flashinfer_autotune_token_counts(runner: "GPUModelRunner") -> tuple[int, ..
      max_tokens = runner.scheduler_config.max_num_batched_tokens
      # Tune the widest bucket set first so bounded passes reuse its configs.
      token_counts = [max_tokens]
@@ -1374,8 +1326,8 @@ index 685b33a5652a23cc28eb5eeddc0cd1e59bd017c2..ec932733b1c767519be47426883437d5
 +            token_counts.append(min(cutoff, max_tokens))
      token_counts.extend(_flashinfer_deferred_moe_token_counts(runner))
      return tuple(dict.fromkeys(token_counts))
- 
-@@ -377,13 +390,23 @@ def _run_flashinfer_autotune_dummy_runs(
+
+@@ -546,11 +559,21 @@ def _run_flashinfer_autotune_dummy_runs(
          # Round M up to match serving-time bucket selection for non-bucket M.
          # See https://github.com/flashinfer-ai/flashinfer/issues/5450
          with fi_utils.autotune(tuning_buckets=tuning_buckets, round_up=True):
@@ -1397,6 +1349,4 @@ index 685b33a5652a23cc28eb5eeddc0cd1e59bd017c2..ec932733b1c767519be47426883437d5
 +                        runner.get_model().compute_logits(
 +                            torch.rand_like(sample_hidden_states)
 +                        )
- 
- 
- def _autotune_cache_fingerprint(path: Path) -> tuple[str, int] | None:
+             autotune_indexer_wq_b(runner.get_model(), max_tuning_tokens)
