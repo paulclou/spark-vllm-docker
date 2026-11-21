@@ -97,3 +97,10 @@ DEEPSEEK_V41_1017_ARGS=(
     '--limit-mm-per-prompt '\''{"image":5}'\'''
     '--engram-config '\''{"cpu_offload":false,"table_memory":"disk"}'\'''
 )
+
+# Qwen3.8 Flash Next cluster: device PLE is part of the generated command.
+# recipes/README.md: Environment Variables and Volumes
+QWEN38_FLASH_NEXT_CLUSTER_TP="2"
+QWEN38_FLASH_NEXT_CLUSTER_ARGS=(
+    "--additional-config '{\"ple_table_memory\":\"device\"}'"
+)

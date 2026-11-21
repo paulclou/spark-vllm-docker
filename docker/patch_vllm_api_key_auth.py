@@ -12,7 +12,9 @@ from pathlib import Path
 
 
 AUTH_REL = Path("vllm/entrypoints/serve/middleware/authenticate.py")
-CLI_REL = Path("vllm/entrypoints/launchers/cli_args.py")
+CLI_REL = Path("vllm/entrypoints/common/cli_args.py")
+# Upstream #62390 moved these arguments; B12X still uses the launcher layout.
+CLI_RELS = (CLI_REL, Path("vllm/entrypoints/launchers/cli_args.py"))
 
 # Production blocks from PR #58028 at ab14efdfba01.
 OLD_GUARD = '''GUARDED_PREFIX = ("/v1", "/v2", "/inference", "/cohere")
@@ -98,6 +100,17 @@ OLD_HELP = '''    """If provided, the server will require one of these keys to b
     https://docs.vllm.ai/en/latest/usage/security.html#api-key-authentication-limitations
     for what it does and does not protect."""'''
 
+OLD_HELP_COHERE = '''    """If provided, the server will require one of these keys to be presented in
+    the header.
+
+    Warning: this only authenticates endpoints under the `/v1`, `/v2`,
+    `/inference`, and `/cohere` path prefixes. Other endpoints on the same
+    server, including `/invocations` (which exposes the same inference
+    capabilities as `/v1`), remain unauthenticated. Do not rely on `--api-key`
+    alone to secure vLLM; see
+    https://docs.vllm.ai/en/latest/usage/security.html#api-key-authentication-limitations
+    for what it does and does not protect."""'''
+
 NEW_HELP = '''    """If provided, the server will require one of these keys to be presented in
     the header.
 
@@ -129,7 +142,10 @@ def patch_authentication(source: str) -> str:
 
 
 def patch_cli_help(source: str) -> str:
-    patched = replace_blocks(source, ((OLD_HELP, NEW_HELP),))
+    variants = [old for old in (OLD_HELP, OLD_HELP_COHERE) if old in source]
+    if len(variants) != 1:
+        raise ValueError("Unexpected API-key CLI help layout")
+    patched = replace_blocks(source, ((variants[0], NEW_HELP),))
     compile(patched, str(CLI_REL), "exec")
     return patched
 
@@ -144,8 +160,14 @@ def main() -> None:
         return
     updates = []
     try:
-        for relative, patcher in ((AUTH_REL, patch_authentication), (CLI_REL, patch_cli_help)):
-            path = args.source_root / relative
+        cli_path = next(
+            (args.source_root / relative for relative in CLI_RELS
+             if (args.source_root / relative).is_file()),
+            None,
+        )
+        if cli_path is None:
+            raise FileNotFoundError("API-key CLI arguments are absent from common and launchers")
+        for path, patcher in ((auth_path, patch_authentication), (cli_path, patch_cli_help)):
             source = path.read_text()
             patched = patcher(source)
             updates.append((path, patched))
