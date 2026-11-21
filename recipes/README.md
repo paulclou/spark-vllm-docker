@@ -173,6 +173,23 @@ predicts it is insufficient for 1M context; both variants size KV memory
 from their existing GPU utilization setting. Startup still rejects an
 insufficient budget rather than silently reducing the context.
 
+### DeepSeek V4.1 Flash 1017 Abliterated
+
+The [four-Spark abliterated recipe](4x-spark-cluster/deepseek-v4.1-flash-1017-abliterated.yaml)
+serves [mrfakename/DeepSeek-V4.1-Flash-1017-abliterated](https://huggingface.co/mrfakename/DeepSeek-V4.1-Flash-1017-abliterated)
+with the stock 1017 B12X and DSpark settings, disk-backed Engram tables, and
+the same 1,048,576-token context limit. Use the explicit recipe path and
+the full Hugging Face model ID in client requests.
+
+```bash
+./run-recipe.sh recipes/4x-spark-cluster/deepseek-v4.1-flash-1017-abliterated.yaml
+```
+
+This command uses the saved four-node cluster configuration and expects a
+complete checkpoint and the B12X image on the cluster. Development validation
+covers command generation. Startup, usable context, and DSpark performance
+for this checkpoint still require hardware validation.
+
 ### DeepSeek V4.1 Flash image count
 
 Both the three- and four-Spark recipes accept up to five images per request.
