@@ -98,6 +98,14 @@ DEEPSEEK_V41_1017_ARGS=(
     '--engram-config '\''{"cpu_offload":false,"table_memory":"disk"}'\'''
 )
 
+# DeepSeek V4.1 Flash 1017 Abliterated command in recipes/README.md.
+DEEPSEEK_V41_1017_ABLITERATED_MODEL="mrfakename/DeepSeek-V4.1-Flash-1017-abliterated"
+DEEPSEEK_V41_1017_ABLITERATED_ARGS=(
+    "vllm serve ${DEEPSEEK_V41_1017_ABLITERATED_MODEL} "
+    "${DEEPSEEK_V41_1017_ARGS[@]}"
+    '--speculative-config '\''{"method":"dspark","num_speculative_tokens":7,"draft_tensor_parallel_size":4,'
+)
+
 # Qwen3.8 Flash Next cluster: device PLE is part of the generated command.
 # recipes/README.md: Environment Variables and Volumes
 QWEN38_FLASH_NEXT_CLUSTER_TP="2"

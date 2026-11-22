@@ -1275,7 +1275,8 @@ test_readme_glm_flash_mod() {
 verify_cluster_args() {
     local recipe_name="$1"
     local expected_tp="$2"
-    shift 2
+    local nodes="$3"
+    shift 3
     local expected_args=("$@")
     
     log_test "README match (cluster): $recipe_name"
@@ -1286,7 +1287,7 @@ verify_cluster_args() {
     fi
     
     # Use fake nodes for cluster mode
-    output=$("$PROJECT_DIR/run-recipe.py" "$recipe_name" --config /dev/null --dry-run -n "10.0.0.1,10.0.0.2" 2>&1)
+    output=$("$PROJECT_DIR/run-recipe.py" "$PROJECT_DIR/recipes/${recipe_name}.yaml" --config /dev/null --dry-run -n "$nodes" 2>&1)
     vllm_cmd=$(extract_vllm_command "$output")
     
     local all_passed=true
@@ -1340,6 +1341,7 @@ test_readme_gpt_oss_cluster() {
 test_readme_minimax_cluster() {
     verify_cluster_args "minimax-m2-awq" \
         "$MINIMAX_CLUSTER_TP" \
+        "10.0.0.1,10.0.0.2" \
         "${MINIMAX_CLUSTER_ARGS[@]}"
 }
 
@@ -1664,7 +1666,11 @@ main() {
     test_readme_glm_flash_cluster
     verify_cluster_args "qwen3.8-flash-next-nvfp4-cluster" \
         "$QWEN38_FLASH_NEXT_CLUSTER_TP" \
+        "10.0.0.1,10.0.0.2" \
         "${QWEN38_FLASH_NEXT_CLUSTER_ARGS[@]}"
+    verify_cluster_args "4x-spark-cluster/deepseek-v4.1-flash-1017-abliterated" \
+        "4" "10.0.0.1,10.0.0.2,10.0.0.3,10.0.0.4" \
+        "${DEEPSEEK_V41_1017_ABLITERATED_ARGS[@]}"
     echo ""
     
     # launch-cluster.sh tests
