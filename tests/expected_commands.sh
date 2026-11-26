@@ -98,6 +98,13 @@ DEEPSEEK_V41_1017_ARGS=(
     '--engram-config '\''{"cpu_offload":false,"table_memory":"disk"}'\'''
 )
 
+# Stock four-Spark DeepSeek V4.1 Flash 1017 command in recipes/README.md.
+DEEPSEEK_V41_1017_TP4_ARGS=(
+    "vllm serve ${DEEPSEEK_V41_1017_MODEL} "
+    "${DEEPSEEK_V41_1017_ARGS[@]}"
+    "--max-num-seqs 8 "
+)
+
 # DeepSeek V4.1 Flash 1017 Abliterated command in recipes/README.md.
 DEEPSEEK_V41_1017_ABLITERATED_MODEL="mrfakename/DeepSeek-V4.1-Flash-1017-abliterated"
 DEEPSEEK_V41_1017_ABLITERATED_ARGS=(
