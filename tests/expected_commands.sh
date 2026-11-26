@@ -88,6 +88,7 @@ MINIMAX_CLUSTER_ARGS=()
 DEEPSEEK_V41_1017_MODEL="deepseek-ai/DeepSeek-V4.1-Flash-1017"
 DEEPSEEK_V41_1017_CONTAINER="vllm-node-b12x"
 DEEPSEEK_V41_1017_ARGS=(
+    "--max-num-seqs 8 "
     "--max-model-len 1048576"
     "--load-format b12x"
     "--tokenizer-mode deepseek_v41"
@@ -96,6 +97,12 @@ DEEPSEEK_V41_1017_ARGS=(
     "--enable-auto-tool-choice"
     '--limit-mm-per-prompt '\''{"image":5}'\'''
     '--engram-config '\''{"cpu_offload":false,"table_memory":"disk"}'\'''
+)
+
+# Stock four-Spark DeepSeek V4.1 Flash 1017 command in recipes/README.md.
+DEEPSEEK_V41_1017_TP4_ARGS=(
+    "vllm serve ${DEEPSEEK_V41_1017_MODEL} "
+    "${DEEPSEEK_V41_1017_ARGS[@]}"
 )
 
 # DeepSeek V4.1 Flash 1017 Abliterated command in recipes/README.md.

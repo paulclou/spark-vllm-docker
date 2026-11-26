@@ -172,14 +172,15 @@ variant removes the original `0.5g` KV cap because current B12X source
 predicts it is insufficient for 1M context; both variants size KV memory
 from their existing GPU utilization setting. Startup still rejects an
 insufficient budget rather than silently reducing the context.
+The four-Spark recipe allows up to eight active sequences.
 
 ### DeepSeek V4.1 Flash 1017 Abliterated
 
 The [four-Spark abliterated recipe](4x-spark-cluster/deepseek-v4.1-flash-1017-abliterated.yaml)
 serves [mrfakename/DeepSeek-V4.1-Flash-1017-abliterated](https://huggingface.co/mrfakename/DeepSeek-V4.1-Flash-1017-abliterated)
 with the stock 1017 B12X and DSpark settings, disk-backed Engram tables, and
-the same 1,048,576-token context limit. Use the explicit recipe path and
-the full Hugging Face model ID in client requests.
+the same 1,048,576-token context limit and eight active sequence slots. Use
+the explicit recipe path and the full Hugging Face model ID in client requests.
 
 ```bash
 ./run-recipe.sh recipes/4x-spark-cluster/deepseek-v4.1-flash-1017-abliterated.yaml

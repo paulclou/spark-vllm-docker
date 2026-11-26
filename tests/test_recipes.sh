@@ -1668,6 +1668,9 @@ main() {
         "$QWEN38_FLASH_NEXT_CLUSTER_TP" \
         "10.0.0.1,10.0.0.2" \
         "${QWEN38_FLASH_NEXT_CLUSTER_ARGS[@]}"
+    verify_cluster_args "deepseek-v4.1-flash-1017" \
+        "4" "10.0.0.1,10.0.0.2,10.0.0.3,10.0.0.4" \
+        "${DEEPSEEK_V41_1017_TP4_ARGS[@]}"
     verify_cluster_args "4x-spark-cluster/deepseek-v4.1-flash-1017-abliterated" \
         "4" "10.0.0.1,10.0.0.2,10.0.0.3,10.0.0.4" \
         "${DEEPSEEK_V41_1017_ABLITERATED_ARGS[@]}"
